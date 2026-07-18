@@ -4,7 +4,7 @@ const router = express.Router();
 
 const upload = require("../middleware/upload");
 
-const article = require("../controllers/Article.controller");
+const article = require("../controllers/Article.Controller");
 
 router.post("/", upload.single("hero_image"), article.createArticle);
 
