@@ -4,12 +4,16 @@ const path = require("path");
 require("dotenv").config();
 
 const userApi = require("./routes/User.route");
-// const ticketApi = require("./routes/Ticket.route");
-// const deviceApi = require("./routes/Device.route");
+const ticketApi = require("./routes/Ticket.route");
 // const shipmentApi = require("./routes/Shipment.route");
 const diagnosisApi = require("./routes/Diagnosis.route");
 // const resourceApi = require("./routes/Resource.route");
 // const faqApi = require("./routes/FAQ.route");
+const articleApi = require("./routes/Article.route");
+const statsApi = require("./routes/Stats.route");
+const bookingApi = require("./routes/Booking.route");
+const ratingApi = require("./routes/Rating.route");
+const deviceApi = require("./routes/Device.route");
 
 const db = require("./config/db");
 
@@ -35,7 +39,7 @@ app.use(
       }
     },
     credentials: true,
-  })
+  }),
 );
 
 app.use(express.json());
@@ -59,10 +63,13 @@ db.getConnection((err, connection) => {
 /* Routes */
 
 app.use("/api/users", userApi);
+app.use("/api/articles", articleApi);
+app.use("/api/stats", statsApi);
 
-// app.use("/api/tickets", ticketApi);
-
-// app.use("/api/devices", deviceApi);
+app.use("/api/tickets", ticketApi);
+app.use("/api/bookings", bookingApi);
+app.use("/api/ratings", ratingApi);
+app.use("/api/devices", deviceApi);
 
 // app.use("/api/shipments", shipmentApi);
 
