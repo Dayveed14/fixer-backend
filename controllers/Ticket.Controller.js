@@ -85,6 +85,7 @@ exports.getTickets = async (req, res) => {
       SELECT
         tickets.id,
         tickets.ticket_code,
+        tickets.customer_id,
         tickets.customer_name,
         tickets.issue,
         tickets.device,
@@ -95,10 +96,14 @@ exports.getTickets = async (req, res) => {
         tickets.created_at,
         tickets.updated_at,
         CONCAT(tech.first_name, ' ', tech.last_name) AS technician_name,
+        customer.email AS customer_email,
+        customer.phone AS customer_phone,
         ratings.rating AS existing_rating
       FROM tickets
       LEFT JOIN users AS tech
         ON tech.id = tickets.technician_id
+      LEFT JOIN users AS customer
+        ON customer.id = tickets.customer_id
       LEFT JOIN ratings
         ON ratings.ticket_id = tickets.id
     `;
@@ -243,8 +248,12 @@ exports.getActiveTicket = async (req, res) => {
           tickets.issue,
           tickets.device,
           tickets.status,
-          tickets.updated_at
+          tickets.updated_at,
+          customer.email AS customer_email,
+          customer.phone AS customer_phone
         FROM tickets
+        LEFT JOIN users AS customer
+          ON customer.id = tickets.customer_id
         WHERE tickets.technician_id = ?
           AND tickets.status = 'In Progress'
         ORDER BY tickets.updated_at DESC
