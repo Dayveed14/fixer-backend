@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const { generateInviteLink } = require("../services/meshCentralService");
 const createNotification = require("../services/notificationService");
 const sendMail = require("../services/mailService");
 
@@ -279,10 +280,66 @@ exports.getBookings = async (req, res) => {
 };
 
 /* ===========================
+   GET SINGLE BOOKING (by id)
+   Powers the customer-facing appointment detail page.
+=========================== */
+
+exports.getBookingById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [rows] = await db.query(
+      `
+        SELECT
+          bookings.id,
+          bookings.booking_reference,
+          bookings.user_id,
+          CONCAT(customer.first_name, ' ', customer.last_name) AS customer_name,
+          bookings.support_type,
+          bookings.booking_date,
+          bookings.booking_time,
+          bookings.duration,
+          bookings.issue_summary,
+          bookings.device,
+          bookings.amount,
+          bookings.payment_status,
+          bookings.technician_id,
+          CONCAT(tech.first_name, ' ', tech.last_name) AS technician_name,
+          tech.email AS technician_email,
+          tech.phone AS technician_phone,
+          bookings.ticket_id,
+          bookings.status,
+          bookings.created_at
+        FROM bookings
+        INNER JOIN users AS customer
+          ON customer.id = bookings.user_id
+        LEFT JOIN users AS tech
+          ON tech.id = bookings.technician_id
+        WHERE bookings.id = ?
+      `,
+      [id],
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        message: "Booking not found.",
+      });
+    }
+
+    return res.json(rows[0]);
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Internal Server Error",
+    });
+  }
+};
+
+/* ===========================
    ASSIGN TECHNICIAN (admin action)
-   Moves status pending -> confirmed, auto-creates the linked
-   repair ticket, and notifies/emails both the technician and
-   the customer.
+   Moves status pending -> confirmed and auto-creates the
+   linked repair ticket, per the agreed workflow.
 =========================== */
 
 exports.assignTechnician = async (req, res) => {
@@ -529,6 +586,47 @@ exports.updateBookingStatus = async (req, res) => {
 
     return res.status(500).json({
       message: "Internal Server Error",
+    });
+  }
+};
+
+/* ===========================
+   START REMOTE SESSION
+   Generates a time-limited MeshCentral invite link for a confirmed
+   booking. The technician sends this link to the customer; once they
+   open it and install the temporary agent, the device shows up in the
+   MeshCentral dashboard for the technician to take control from.
+=========================== */
+
+exports.startRemoteSession = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [[booking]] = await db.query(
+      "SELECT id, status FROM bookings WHERE id = ?",
+      [id],
+    );
+
+    if (!booking) {
+      return res.status(404).json({
+        message: "Booking not found.",
+      });
+    }
+
+    if (booking.status !== "confirmed") {
+      return res.status(400).json({
+        message: "Only confirmed bookings can start a remote session.",
+      });
+    }
+
+    const inviteLink = await generateInviteLink({ hours: 2 });
+
+    return res.json({ inviteLink });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: error.message || "Internal Server Error",
     });
   }
 };

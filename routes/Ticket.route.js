@@ -5,7 +5,9 @@ const router = express.Router();
 const {
   createTicket,
   getTickets,
+  getTicketById,
   updateTicketStatus,
+  updateTicket,
   assignTechnician,
   deleteTicket,
   getActiveTicket,
@@ -17,9 +19,13 @@ router.get("/", getTickets);
 
 router.get("/active/:technicianId", getActiveTicket);
 
+router.get("/:id", getTicketById);
+
 router.patch("/:id/status", updateTicketStatus);
 
 router.patch("/:id/assign", assignTechnician);
+
+router.patch("/:id", updateTicket);
 
 router.delete("/:id", deleteTicket);
 

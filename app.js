@@ -14,6 +14,7 @@ const statsApi = require("./routes/Stats.route");
 const bookingApi = require("./routes/Booking.route");
 const ratingApi = require("./routes/Rating.route");
 const deviceApi = require("./routes/Device.route");
+const notificationApi = require("./routes/Notification.route");
 
 const db = require("./config/db");
 
@@ -70,6 +71,7 @@ app.use("/api/tickets", ticketApi);
 app.use("/api/bookings", bookingApi);
 app.use("/api/ratings", ratingApi);
 app.use("/api/devices", deviceApi);
+app.use("/api/notifications", notificationApi);
 
 // app.use("/api/shipments", shipmentApi);
 

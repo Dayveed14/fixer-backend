@@ -208,6 +208,91 @@ exports.assignTechnician = async (req, res) => {
 };
 
 /* ===========================
+   UPDATE TICKET (admin edit)
+   Full edit — issue, device, priority, status, amount, technician —
+   distinct from updateTicketStatus which technicians use for the
+   narrower status/amount-only update on their Assigned Jobs page.
+=========================== */
+
+exports.updateTicket = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const {
+      customer_name,
+      issue,
+      device,
+      priority,
+      status,
+      amount,
+      technician_id,
+    } = req.body;
+
+    const allowedStatuses = ["Open", "In Progress", "Completed", "Pending"];
+    const allowedPriorities = ["Low", "Medium", "High"];
+
+    if (status && !allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        message: "Invalid status.",
+      });
+    }
+
+    if (priority && !allowedPriorities.includes(priority)) {
+      return res.status(400).json({
+        message: "Invalid priority.",
+      });
+    }
+
+    if (!customer_name || !issue) {
+      return res.status(400).json({
+        message: "customer_name and issue are required.",
+      });
+    }
+
+    const [result] = await db.query(
+      `
+        UPDATE tickets
+        SET
+          customer_name = ?,
+          issue = ?,
+          device = ?,
+          priority = ?,
+          status = ?,
+          amount = ?,
+          technician_id = ?
+        WHERE id = ?
+      `,
+      [
+        customer_name,
+        issue,
+        device || null,
+        priority || "Medium",
+        status || "Open",
+        amount === "" || amount === undefined ? null : amount,
+        technician_id || null,
+        id,
+      ],
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        message: "Ticket not found.",
+      });
+    }
+
+    return res.json({
+      message: "Ticket updated",
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Internal Server Error",
+    });
+  }
+};
+
+/* ===========================
    DELETE TICKET
 =========================== */
 
@@ -220,6 +305,61 @@ exports.deleteTicket = async (req, res) => {
     return res.json({
       message: "Ticket deleted",
     });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Internal Server Error",
+    });
+  }
+};
+
+/* ===========================
+   GET SINGLE TICKET (by id)
+   Powers the customer-facing job detail page.
+=========================== */
+
+exports.getTicketById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [rows] = await db.query(
+      `
+        SELECT
+          tickets.id,
+          tickets.ticket_code,
+          tickets.customer_id,
+          tickets.customer_name,
+          tickets.issue,
+          tickets.device,
+          tickets.priority,
+          tickets.status,
+          tickets.amount,
+          tickets.technician_id,
+          tickets.created_at,
+          tickets.updated_at,
+          CONCAT(tech.first_name, ' ', tech.last_name) AS technician_name,
+          tech.email AS technician_email,
+          tech.phone AS technician_phone,
+          ratings.rating AS existing_rating,
+          ratings.comment AS existing_rating_comment
+        FROM tickets
+        LEFT JOIN users AS tech
+          ON tech.id = tickets.technician_id
+        LEFT JOIN ratings
+          ON ratings.ticket_id = tickets.id
+        WHERE tickets.id = ?
+      `,
+      [id],
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        message: "Ticket not found.",
+      });
+    }
+
+    return res.json(rows[0]);
   } catch (error) {
     console.error(error);
 
