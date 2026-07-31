@@ -603,7 +603,21 @@ exports.startRemoteSession = async (req, res) => {
     const { id } = req.params;
 
     const [[booking]] = await db.query(
-      "SELECT id, status FROM bookings WHERE id = ?",
+      `
+        SELECT
+          bookings.id,
+          bookings.status,
+          bookings.booking_reference,
+          CONCAT(customer.first_name, ' ', customer.last_name) AS customer_name,
+          customer.email AS customer_email,
+          CONCAT(tech.first_name, ' ', tech.last_name) AS technician_name
+        FROM bookings
+        INNER JOIN users AS customer
+          ON customer.id = bookings.user_id
+        LEFT JOIN users AS tech
+          ON tech.id = bookings.technician_id
+        WHERE bookings.id = ?
+      `,
       [id],
     );
 
@@ -620,6 +634,35 @@ exports.startRemoteSession = async (req, res) => {
     }
 
     const inviteLink = await generateInviteLink({ hours: 2 });
+
+    // Isolated in its own try/catch — a mail failure shouldn't turn an
+    // already-generated session into a 500 for the technician. They
+    // still get inviteLink back in the response either way.
+    if (booking.customer_email) {
+      try {
+        await sendMail({
+          to: booking.customer_email,
+          subject: "Your remote support session is ready",
+          html: `
+                <h2>Remote support session ready</h2>
+
+                <p>Hi ${booking.customer_name},</p>
+
+                <p>${booking.technician_name || "Your technician"} is ready to start your remote support session for booking ${booking.booking_reference}.</p>
+
+                <p>Click the link below to install a temporary connection tool and begin:</p>
+
+                <p><a href="${inviteLink}">${inviteLink}</a></p>
+
+                <p>This link expires in 2 hours and only needs to be used once.</p>
+
+                <p>Thank you,<br/>Fixer Support</p>
+                `,
+        });
+      } catch (mailError) {
+        console.error("Remote session started but email failed:", mailError);
+      }
+    }
 
     return res.json({ inviteLink });
   } catch (error) {

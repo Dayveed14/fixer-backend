@@ -4,6 +4,7 @@ const path = require("path");
 require("dotenv").config();
 
 const userApi = require("./routes/User.route");
+const testApi = require("./routes/Test.route");
 const ticketApi = require("./routes/Ticket.route");
 // const shipmentApi = require("./routes/Shipment.route");
 const diagnosisApi = require("./routes/Diagnosis.route");
@@ -72,6 +73,7 @@ app.use("/api/bookings", bookingApi);
 app.use("/api/ratings", ratingApi);
 app.use("/api/devices", deviceApi);
 app.use("/api/notifications", notificationApi);
+app.use("/api/test", testApi);
 
 // app.use("/api/shipments", shipmentApi);
 
