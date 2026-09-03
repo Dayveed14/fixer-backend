@@ -21,11 +21,10 @@ exports.runDiagnosis = async (req, res) => {
     //--------------------------------------------------
     // Save request
     //--------------------------------------------------
-const id = Date.now();
+
     const [request] = await db.query(
       `INSERT INTO diagnosis_requests
             (
-                id,
                 user_id,
                 device_type,
                 brand_model,
@@ -34,10 +33,9 @@ const id = Date.now();
                 description
             )
 
-            VALUES (?, ?, ?, ?, ?, ?,?)`,
+            VALUES (?, ?, ?, ?, ?, ?)`,
 
       [
-        id,
         user_id || null,
         deviceType,
         brand,
