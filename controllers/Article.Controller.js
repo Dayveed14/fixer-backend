@@ -1,4 +1,6 @@
 const db = require("../config/db");
+const { deleteAssetByUrl } = require("../config/cloudinary");
+
 exports.createArticle = async (req, res) => {
   try {
     const {
@@ -14,7 +16,7 @@ exports.createArticle = async (req, res) => {
       image_alt,
     } = req.body;
 
-    const hero_image = req.file ? req.file.filename : null;
+    const hero_image = req.file ? req.file.cloudinaryUrl : null;
 
     const sql = `
     INSERT INTO articles
@@ -144,10 +146,21 @@ image_alt=?
       image_alt,
     ];
 
+    let oldImageUrl = null;
+
     if (req.file) {
+      // Look up the image currently on this article so we can delete it
+      // from Cloudinary once the new one is safely saved.
+      const [existing] = await db.query(
+        "SELECT hero_image FROM articles WHERE id=?",
+        [id],
+      );
+
+      oldImageUrl = existing[0] ? existing[0].hero_image : null;
+
       sql += ", hero_image=?";
 
-      values.push(req.file.filename);
+      values.push(req.file.cloudinaryUrl);
     }
 
     sql += " WHERE id=?";
@@ -155,6 +168,10 @@ image_alt=?
     values.push(id);
 
     await db.query(sql, values);
+
+    if (oldImageUrl) {
+      await deleteAssetByUrl(oldImageUrl);
+    }
 
     res.json({
       message: "Article updated",
@@ -170,11 +187,22 @@ exports.deleteArticle = async (req, res) => {
   try {
     const { id } = req.params;
 
+    const [existing] = await db.query(
+      "SELECT hero_image FROM articles WHERE id=?",
+      [id],
+    );
+
+    const imageUrl = existing[0] ? existing[0].hero_image : null;
+
     await db.query(
       "DELETE FROM articles WHERE id=?",
 
       [id],
     );
+
+    if (imageUrl) {
+      await deleteAssetByUrl(imageUrl);
+    }
 
     res.json({
       message: "Article deleted",

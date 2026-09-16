@@ -142,7 +142,7 @@ exports.createBooking = async (req, res) => {
                 <p><strong>Issue:</strong> ${issue_summary || "N/A"}</p>
 
                 <p><strong>Booking Ref:</strong> ${booking_reference}</p>`,
-        });
+        }, "admin");
       }
 
       if (customerEmail) {
@@ -165,7 +165,7 @@ exports.createBooking = async (req, res) => {
 
                   <p>Thank you,<br/>Fixer Support</p>
                   `,
-        });
+        }, "support");
       }
     } catch (notifyError) {
       console.error(
@@ -507,7 +507,7 @@ exports.assignTechnician = async (req, res) => {
 
                 <p><strong>Issue:</strong> ${booking.issue_summary || "N/A"}</p>
                 `,
-        });
+        }, "notifications");
       }
 
       if (booking.customer_email) {
@@ -527,7 +527,7 @@ exports.assignTechnician = async (req, res) => {
 
                 <p>Thank you,<br/>Fixer Support</p>
                 `,
-        });
+        }, "support");
       }
     } catch (notifyError) {
       console.error(
@@ -658,7 +658,7 @@ exports.startRemoteSession = async (req, res) => {
 
                 <p>Thank you,<br/>Fixer Support</p>
                 `,
-        });
+        }, "support");
       } catch (mailError) {
         console.error("Remote session started but email failed:", mailError);
       }

@@ -28,6 +28,8 @@ const PORT = process.env.PORT || 4000;
 const allowedOrigins = [
   "http://localhost:5173",
   "https://fixer-vite.vercel.app",
+  "https://fixerng.app",
+  "https://www.fixerng.app",
 ];
 
 app.use(
