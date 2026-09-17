@@ -11,6 +11,7 @@ const diagnosisApi = require("./routes/Diagnosis.route");
 // const resourceApi = require("./routes/Resource.route");
 // const faqApi = require("./routes/FAQ.route");
 const articleApi = require("./routes/Article.route");
+const diyVideoApi = require("./routes/DiyVideo.route");
 const statsApi = require("./routes/Stats.route");
 const bookingApi = require("./routes/Booking.route");
 const ratingApi = require("./routes/Rating.route");
@@ -68,6 +69,7 @@ db.getConnection((err, connection) => {
 
 app.use("/api/users", userApi);
 app.use("/api/articles", articleApi);
+app.use("/api/diy-videos", diyVideoApi);
 app.use("/api/stats", statsApi);
 
 app.use("/api/tickets", ticketApi);
