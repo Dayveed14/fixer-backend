@@ -1,82 +1,57 @@
-const nodemailer = require("nodemailer");
-const dns = require("dns");
+const { Resend } = require("resend");
 
-dns.setDefaultResultOrder("ipv4first"); // Node 18+, do this before creating transporters
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-const SMTP_HOST = process.env.SMTP_HOST || "mail.privateemail.com";
-const SMTP_PORT = Number(process.env.SMTP_PORT) || 587;
-const SMTP_SECURE = SMTP_PORT === 465;
-
-function createTransporter(user, pass) {
-  return nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_SECURE, // true for 465, false for 587 (STARTTLS)
-    requireTLS: !SMTP_SECURE,
-    connectionTimeout: 30000,
-    greetingTimeout: 30000,
-    socketTimeout: 30000,
-    family: 4,
-    auth: { user, pass },
-  });
-}
-
-// Three Namecheap Private Email mailboxes, each used for a different kind of
-// outgoing mail so replies land in the right inbox:
-//   - support:        customer-facing (booking confirmations, session links)
-//   - admin:           internal alerts (new booking notifications)
-//   - notifications:   technician-facing (job assignments)
+// Three Fixer sender identities.
+// All three use the same verified fixerng.app domain.
 const mailboxes = {
   support: {
-    user: process.env.SUPPORT_EMAIL_USER,
-    pass: process.env.SUPPORT_EMAIL_PASS,
+    user: "support@fixerng.app",
     fromName: "Fixer Support",
   },
+
   admin: {
-    user: process.env.ADMIN_EMAIL_USER,
-    pass: process.env.ADMIN_EMAIL_PASS,
+    user: "admin@fixerng.app",
     fromName: "Fixer Alerts",
   },
+
   notifications: {
-    user: process.env.NOTIFY_EMAIL_USER,
-    pass: process.env.NOTIFY_EMAIL_PASS,
+    user: "notifications@fixerng.app",
     fromName: "Fixer Notifications",
   },
 };
 
-const transporters = {};
-
-function getTransporter(mailbox) {
-  const config = mailboxes[mailbox];
-
-  if (!config || !config.user || !config.pass) {
-    throw new Error(
-      `Mailbox "${mailbox}" is not configured — check the matching *_EMAIL_USER / *_EMAIL_PASS vars in .env`,
-    );
-  }
-
-  if (!transporters[mailbox]) {
-    transporters[mailbox] = createTransporter(config.user, config.pass);
-  }
-
-  return transporters[mailbox];
-}
-
-// sendMail(options, mailbox?) — mailbox defaults to "support".
-// options is the usual nodemailer message object (to, subject, html, ...).
 const sendMail = async (options, mailbox = "support") => {
   try {
     const config = mailboxes[mailbox];
-    const transporter = getTransporter(mailbox);
 
-    await transporter.sendMail({
+    if (!config) {
+      throw new Error(`Unknown mailbox: ${mailbox}`);
+    }
+
+    if (!process.env.RESEND_API_KEY) {
+      throw new Error("RESEND_API_KEY is not configured");
+    }
+
+    const { data, error } = await resend.emails.send({
       from: `"${config.fromName}" <${config.user}>`,
       ...options,
     });
 
-    console.log(`Email sent via ${mailbox} mailbox (${config.user})`);
+    if (error) {
+      throw new Error(error.message || "Resend failed to send email");
+    }
+
+    console.log(
+      `Email sent via ${mailbox} mailbox (${config.user})`,
+      data?.id ? `ID: ${data.id}` : "",
+    );
+
+    return data;
   } catch (err) {
     console.error(`Failed to send email via ${mailbox} mailbox:`, err.message);
+
+    throw err;
   }
 };
 
