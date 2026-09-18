@@ -10,8 +10,9 @@ const {
   updateBookingStatus,
   startRemoteSession,
 } = require("../controllers/Booking.Controller");
+const { paymentFlowLimiter } = require("../middleware/rateLimit");
 
-router.post("/", createBooking);
+router.post("/", paymentFlowLimiter, createBooking);
 
 router.get("/", getBookings);
 

@@ -67,7 +67,7 @@ Return ONLY valid JSON in this exact format:
 
     // Use the retry wrapper instead of direct call
     const response = await generateWithRetry({
-      model: "gemini-3.6-flash",
+      model: "gemini-3.7-flash",
       contents: prompt,
     });
 

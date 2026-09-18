@@ -22,5 +22,5 @@ const fileFilter = (req, file, cb) => {
 module.exports = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB — generous headroom for video
+  limits: { fileSize: 150 * 1024 * 1024 }, // 150MB — video needs more headroom than images
 });

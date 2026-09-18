@@ -72,6 +72,17 @@ async function generateInviteLink({ hours = 2 } = {}) {
     String(hours),
   ]);
 
+  // meshctrl swallows real connection errors (server down, port blocked,
+  // wrong/stale IP, etc.) into a plain "Unable to connect to <url>" or
+  // "Unable to resolve <url>" line on stdout — it never throws for these.
+  // Catch that case specifically so the technician sees something actionable
+  // instead of "Unexpected meshctrl output, no link found: ...".
+  if (/^Unable to (connect to|resolve) /.test(output)) {
+    throw new Error(
+      `Couldn't reach the MeshCentral server at ${MESHCENTRAL_URL}. It may be down, the port may be blocked, or its IP address may have changed.`,
+    );
+  }
+
   // meshctrl's exact wording has shifted across versions, so rather than
   // matching specific text, pull the first URL out of whatever it prints.
   const match = output.match(/https?:\/\/\S+/);

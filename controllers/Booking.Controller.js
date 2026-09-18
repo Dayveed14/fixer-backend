@@ -2,19 +2,26 @@ const db = require("../config/db");
 const { generateInviteLink } = require("../services/meshCentralService");
 const createNotification = require("../services/notificationService");
 const sendMail = require("../services/mailService");
+const { verifyPayment } = require("../services/paystackService");
 
-// Matches the $ pricing shown in BookCall.jsx's SUPPORT_TYPES.
+// Matches the ₦ pricing shown in BookCall.jsx's SUPPORT_TYPES.
 // Frontend uses "remote" as the id; DB enum uses "remote_desktop".
+// amount is stored in Naira (what the DB/UI shows); amountKobo is what
+// Paystack actually deals in and is what we verify the payment against.
 const SUPPORT_TYPE_MAP = {
-  voice: { db: "voice", amount: 29 },
-  video: { db: "video", amount: 49 },
-  remote: { db: "remote_desktop", amount: 69 },
+  voice: { db: "voice", amount: 5000, amountKobo: 500000 },
+  video: { db: "video", amount: 7000, amountKobo: 700000 },
+  remote: { db: "remote_desktop", amount: 10000, amountKobo: 1000000 },
 };
 
 /* ===========================
    CREATE BOOKING
    Called when a customer completes the BookCall.jsx flow.
-   Payment is mocked: no real charge, just recorded as "paid".
+   The frontend must have already collected payment via the Paystack popup
+   and pass the resulting reference here — we independently re-verify it
+   with Paystack (status, currency, and exact amount) before writing
+   anything to the DB. A booking is never created on the strength of the
+   frontend's word alone.
 =========================== */
 
 exports.createBooking = async (req, res) => {
@@ -28,12 +35,19 @@ exports.createBooking = async (req, res) => {
       issue_summary,
       device,
       diagnosis_id,
+      payment_reference,
     } = req.body;
 
-    if (!user_id || !support_type || !booking_date || !booking_time) {
+    if (
+      !user_id ||
+      !support_type ||
+      !booking_date ||
+      !booking_time ||
+      !payment_reference
+    ) {
       return res.status(400).json({
         message:
-          "user_id, support_type, booking_date and booking_time are required.",
+          "user_id, support_type, booking_date, booking_time and payment_reference are required.",
       });
     }
 
@@ -42,6 +56,16 @@ exports.createBooking = async (req, res) => {
     if (!typeInfo) {
       return res.status(400).json({
         message: "Invalid support_type.",
+      });
+    }
+
+    try {
+      await verifyPayment(payment_reference, typeInfo.amountKobo);
+    } catch (paymentError) {
+      console.error("Booking payment verification failed:", paymentError.message);
+
+      return res.status(402).json({
+        message: `Payment could not be verified: ${paymentError.message}`,
       });
     }
 
@@ -72,10 +96,11 @@ exports.createBooking = async (req, res) => {
         device,
         amount,
         payment_status,
+        payment_reference,
         diagnosis_id,
         status
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, 'pending')
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?, 'pending')
     `;
 
     const [result] = await db.query(insertSql, [
@@ -88,6 +113,7 @@ exports.createBooking = async (req, res) => {
       issue_summary || null,
       device || null,
       typeInfo.amount,
+      payment_reference,
       diagnosis_id || null,
     ]);
 
@@ -182,6 +208,12 @@ exports.createBooking = async (req, res) => {
     });
   } catch (error) {
     console.error(error);
+
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({
+        message: "This payment has already been used for a booking.",
+      });
+    }
 
     return res.status(500).json({
       message: "Internal Server Error",

@@ -12,6 +12,8 @@ const diagnosisApi = require("./routes/Diagnosis.route");
 // const faqApi = require("./routes/FAQ.route");
 const articleApi = require("./routes/Article.route");
 const diyVideoApi = require("./routes/DiyVideo.route");
+const contactApi = require("./routes/Contact.route");
+const shipmentApi = require("./routes/Shipment.route");
 const statsApi = require("./routes/Stats.route");
 const bookingApi = require("./routes/Booking.route");
 const ratingApi = require("./routes/Rating.route");
@@ -21,6 +23,12 @@ const notificationApi = require("./routes/Notification.route");
 const db = require("./config/db");
 
 const app = express();
+
+// Required for accurate per-IP rate limiting behind Render's reverse proxy —
+// without this, express-rate-limit either can't tell clients apart or
+// refuses to start (it validates this on purpose, since trusting
+// X-Forwarded-For blindly is spoofable if you're not actually behind a proxy).
+app.set("trust proxy", 1);
 
 const PORT = process.env.PORT || 4000;
 
@@ -70,6 +78,8 @@ db.getConnection((err, connection) => {
 app.use("/api/users", userApi);
 app.use("/api/articles", articleApi);
 app.use("/api/diy-videos", diyVideoApi);
+app.use("/api/contact", contactApi);
+app.use("/api/shipments", shipmentApi);
 app.use("/api/stats", statsApi);
 
 app.use("/api/tickets", ticketApi);
