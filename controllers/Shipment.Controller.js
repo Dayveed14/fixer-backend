@@ -205,7 +205,18 @@ exports.getShipment = async (req, res) => {
       });
     }
 
-    res.json(rows[0]);
+    const shipment = rows[0];
+
+    // Shipments aren't tied to a user_id (they're taken from the form as
+    // name/email/phone), so ownership is checked against the token's
+    // email. Admins can look up anything.
+    if (req.user.role !== "admin" && shipment.email !== req.user.email) {
+      return res.status(403).json({
+        message: "You do not have permission to view this shipment.",
+      });
+    }
+
+    res.json(shipment);
   } catch (err) {
     res.status(500).json({
       message: "Server Error",
@@ -246,6 +257,17 @@ exports.getUserShipment = async (req, res) => {
     if (!email) {
       return res.status(400).json({
         message: "Email is required.",
+      });
+    }
+
+    // A customer can only pull up their own shipment history — the
+    // route is authenticated, but the :email param is still
+    // caller-supplied, so without this check anyone logged in could
+    // page through anyone else's shipments by email. Admins can look
+    // up any email.
+    if (req.user.role !== "admin" && email.toLowerCase() !== req.user.email.toLowerCase()) {
+      return res.status(403).json({
+        message: "You do not have permission to view these shipments.",
       });
     }
 

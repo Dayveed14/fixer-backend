@@ -7,11 +7,17 @@ const {
   getUserStats,
   getTechnicianStats,
 } = require("../controllers/Stats.Controller");
+const { verifyToken, authorize } = require("../middleware/auth");
 
-router.get("/dashboard", getDashboardStats);
+router.get("/dashboard", verifyToken, authorize("admin"), getDashboardStats);
 
-router.get("/user/:userId", getUserStats);
+router.get("/user/:userId", verifyToken, getUserStats);
 
-router.get("/technician/:technicianId", getTechnicianStats);
+router.get(
+  "/technician/:technicianId",
+  verifyToken,
+  authorize("admin", "technician"),
+  getTechnicianStats,
+);
 
 module.exports = router;

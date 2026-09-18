@@ -27,7 +27,6 @@ const SUPPORT_TYPE_MAP = {
 exports.createBooking = async (req, res) => {
   try {
     const {
-      user_id,
       support_type, // "voice" | "video" | "remote" (frontend ids)
       booking_date,
       booking_time,
@@ -38,8 +37,11 @@ exports.createBooking = async (req, res) => {
       payment_reference,
     } = req.body;
 
+    // Always the caller's own id from the verified token — a booking can
+    // only ever be created for the account that's actually logged in.
+    const user_id = req.user.id;
+
     if (
-      !user_id ||
       !support_type ||
       !booking_date ||
       !booking_time ||
@@ -47,7 +49,7 @@ exports.createBooking = async (req, res) => {
     ) {
       return res.status(400).json({
         message:
-          "user_id, support_type, booking_date, booking_time and payment_reference are required.",
+          "support_type, booking_date, booking_time and payment_reference are required.",
       });
     }
 
@@ -229,7 +231,14 @@ exports.createBooking = async (req, res) => {
 exports.getBookings = async (req, res) => {
   try {
     const userId = Number(req.query.user_id) || null;
-    const technicianId = Number(req.query.technician_id) || null;
+    // Technicians can only ever list their own bookings — the token's
+    // identity wins over anything passed in the query string, so a
+    // technician can't page through another technician's bookings by
+    // guessing an id. Admins can filter by whichever technician_id they want.
+    const technicianId =
+      req.user.role === "technician"
+        ? req.user.id
+        : Number(req.query.technician_id) || null;
     const status = req.query.status || null;
     const today = req.query.today === "true";
     const upcoming = req.query.upcoming === "true";
@@ -358,7 +367,22 @@ exports.getBookingById = async (req, res) => {
       });
     }
 
-    return res.json(rows[0]);
+    const booking = rows[0];
+
+    // Ownership check: the customer who owns it, the technician assigned
+    // to it, or an admin. Anyone else authenticated shouldn't be able to
+    // pull up a stranger's booking just by guessing the id.
+    const isOwner = req.user.role === "admin" ||
+      booking.user_id === req.user.id ||
+      booking.technician_id === req.user.id;
+
+    if (!isOwner) {
+      return res.status(403).json({
+        message: "You do not have permission to view this booking.",
+      });
+    }
+
+    return res.json(booking);
   } catch (error) {
     console.error(error);
 
@@ -608,6 +632,25 @@ exports.updateBookingStatus = async (req, res) => {
       });
     }
 
+    // Technicians may only move bookings that are actually assigned to
+    // them; admins can update any booking.
+    if (req.user.role === "technician") {
+      const [[booking]] = await db.query(
+        "SELECT technician_id FROM bookings WHERE id = ?",
+        [id],
+      );
+
+      if (!booking) {
+        return res.status(404).json({ message: "Booking not found." });
+      }
+
+      if (booking.technician_id !== req.user.id) {
+        return res.status(403).json({
+          message: "You are not assigned to this booking.",
+        });
+      }
+    }
+
     await db.query("UPDATE bookings SET status = ? WHERE id = ?", [status, id]);
 
     return res.json({
@@ -640,6 +683,7 @@ exports.startRemoteSession = async (req, res) => {
           bookings.id,
           bookings.status,
           bookings.booking_reference,
+          bookings.technician_id,
           CONCAT(customer.first_name, ' ', customer.last_name) AS customer_name,
           customer.email AS customer_email,
           CONCAT(tech.first_name, ' ', tech.last_name) AS technician_name
@@ -656,6 +700,12 @@ exports.startRemoteSession = async (req, res) => {
     if (!booking) {
       return res.status(404).json({
         message: "Booking not found.",
+      });
+    }
+
+    if (req.user.role === "technician" && booking.technician_id !== req.user.id) {
+      return res.status(403).json({
+        message: "You are not assigned to this booking.",
       });
     }
 

@@ -8,13 +8,14 @@ const {
   updateDeviceService,
   deleteDevice,
 } = require("../controllers/Device.Controller");
+const { verifyToken } = require("../middleware/auth");
 
-router.post("/", createDevice);
+router.post("/", verifyToken, createDevice);
 
-router.get("/", getDevices);
+router.get("/", verifyToken, getDevices);
 
-router.patch("/:id/service", updateDeviceService);
+router.patch("/:id/service", verifyToken, updateDeviceService);
 
-router.delete("/:id", deleteDevice);
+router.delete("/:id", verifyToken, deleteDevice);
 
 module.exports = router;

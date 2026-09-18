@@ -87,6 +87,13 @@ exports.getTechnicianStats = async (req, res) => {
       });
     }
 
+    // A technician can only pull their own stats — admins can view any.
+    if (req.user.role === "technician" && Number(technicianId) !== req.user.id) {
+      return res.status(403).json({
+        message: "You do not have permission to view these stats.",
+      });
+    }
+
     const [[{ assignedJobs }]] = await db.query(
       "SELECT COUNT(*) AS assignedJobs FROM tickets WHERE technician_id = ?",
       [technicianId],
@@ -155,6 +162,13 @@ exports.getUserStats = async (req, res) => {
     if (!userId) {
       return res.status(400).json({
         message: "userId is required.",
+      });
+    }
+
+    // A regular user can only pull their own dashboard stats.
+    if (req.user.role === "user" && Number(userId) !== req.user.id) {
+      return res.status(403).json({
+        message: "You do not have permission to view these stats.",
       });
     }
 

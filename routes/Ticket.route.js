@@ -12,21 +12,22 @@ const {
   deleteTicket,
   getActiveTicket,
 } = require("../controllers/Ticket.Controller");
+const { verifyToken, authorize } = require("../middleware/auth");
 
-router.post("/", createTicket);
+router.post("/", verifyToken, authorize("admin", "technician"), createTicket);
 
-router.get("/", getTickets);
+router.get("/", verifyToken, authorize("admin", "technician"), getTickets);
 
-router.get("/active/:technicianId", getActiveTicket);
+router.get("/active/:technicianId", verifyToken, getActiveTicket);
 
-router.get("/:id", getTicketById);
+router.get("/:id", verifyToken, getTicketById);
 
-router.patch("/:id/status", updateTicketStatus);
+router.patch("/:id/status", verifyToken, authorize("admin", "technician"), updateTicketStatus);
 
-router.patch("/:id/assign", assignTechnician);
+router.patch("/:id/assign", verifyToken, authorize("admin"), assignTechnician);
 
-router.patch("/:id", updateTicket);
+router.patch("/:id", verifyToken, authorize("admin"), updateTicket);
 
-router.delete("/:id", deleteTicket);
+router.delete("/:id", verifyToken, authorize("admin"), deleteTicket);
 
 module.exports = router;

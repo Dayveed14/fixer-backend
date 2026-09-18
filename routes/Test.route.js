@@ -1,9 +1,10 @@
 const express = require("express");
 const { generateInviteLink } = require("../services/meshCentralService");
+const { verifyToken, authorize } = require("../middleware/auth");
 
 const router = express.Router();
 
-router.get("/mesh/test", async (req, res) => {
+router.get("/mesh/test", verifyToken, authorize("admin"), async (req, res) => {
   try {
     const link = await generateInviteLink();
 

@@ -11,17 +11,28 @@ const {
   startRemoteSession,
 } = require("../controllers/Booking.Controller");
 const { paymentFlowLimiter } = require("../middleware/rateLimit");
+const { verifyToken, authorize } = require("../middleware/auth");
 
-router.post("/", paymentFlowLimiter, createBooking);
+router.post("/", verifyToken, paymentFlowLimiter, createBooking);
 
-router.get("/", getBookings);
+router.get("/", verifyToken, authorize("admin", "technician"), getBookings);
 
-router.get("/:id", getBookingById);
+router.get("/:id", verifyToken, getBookingById);
 
-router.patch("/:id/assign", assignTechnician);
+router.patch("/:id/assign", verifyToken, authorize("admin"), assignTechnician);
 
-router.patch("/:id/status", updateBookingStatus);
+router.patch(
+  "/:id/status",
+  verifyToken,
+  authorize("admin", "technician"),
+  updateBookingStatus,
+);
 
-router.post("/:id/remote-session", startRemoteSession);
+router.post(
+  "/:id/remote-session",
+  verifyToken,
+  authorize("admin", "technician"),
+  startRemoteSession,
+);
 
 module.exports = router;

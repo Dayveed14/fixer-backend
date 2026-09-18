@@ -79,7 +79,12 @@ exports.getTickets = async (req, res) => {
   try {
     const limit = Number(req.query.limit) || null;
     const customerId = Number(req.query.customer_id) || null;
-    const technicianId = Number(req.query.technician_id) || null;
+    // Technicians only ever see their own tickets — token identity wins
+    // over the query string, same as the bookings list.
+    const technicianId =
+      req.user.role === "technician"
+        ? req.user.id
+        : Number(req.query.technician_id) || null;
 
     let sql = `
       SELECT
@@ -159,6 +164,24 @@ exports.updateTicketStatus = async (req, res) => {
       return res.status(400).json({
         message: "Invalid status.",
       });
+    }
+
+    // Technicians may only update tickets actually assigned to them.
+    if (req.user.role === "technician") {
+      const [[ticket]] = await db.query(
+        "SELECT technician_id FROM tickets WHERE id = ?",
+        [id],
+      );
+
+      if (!ticket) {
+        return res.status(404).json({ message: "Ticket not found." });
+      }
+
+      if (ticket.technician_id !== req.user.id) {
+        return res.status(403).json({
+          message: "You are not assigned to this ticket.",
+        });
+      }
     }
 
     const sql = `
@@ -359,7 +382,19 @@ exports.getTicketById = async (req, res) => {
       });
     }
 
-    return res.json(rows[0]);
+    const ticket = rows[0];
+
+    const isOwner = req.user.role === "admin" ||
+      ticket.customer_id === req.user.id ||
+      ticket.technician_id === req.user.id;
+
+    if (!isOwner) {
+      return res.status(403).json({
+        message: "You do not have permission to view this ticket.",
+      });
+    }
+
+    return res.json(ticket);
   } catch (error) {
     console.error(error);
 
@@ -378,6 +413,14 @@ exports.getTicketById = async (req, res) => {
 exports.getActiveTicket = async (req, res) => {
   try {
     const { technicianId } = req.params;
+
+    // A technician can only ever pull their own active ticket — admins
+    // may look up any technician's.
+    if (req.user.role === "technician" && Number(technicianId) !== req.user.id) {
+      return res.status(403).json({
+        message: "You do not have permission to view this technician's ticket.",
+      });
+    }
 
     const [rows] = await db.query(
       `

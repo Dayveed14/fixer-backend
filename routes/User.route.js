@@ -9,15 +9,19 @@ const {
   getTechnicians,
   getUsers,
 } = require("../controllers/User.Controller");
+const { verifyToken, authorize } = require("../middleware/auth");
 
 router.post("/register", registerUser);
 
 router.post("/login", loginUser);
 
-router.post("/create", createUser);
+// Admin-only: provisions technician/staff accounts
+router.post("/create", verifyToken, authorize("admin"), createUser);
 
-router.get("/technicians", getTechnicians);
+// Any authenticated user (customers need this to pick a technician when booking)
+router.get("/technicians", verifyToken, getTechnicians);
 
-router.get("/", getUsers);
+// Full user list with contact info — admin only
+router.get("/", verifyToken, authorize("admin"), getUsers);
 
 module.exports = router;

@@ -9,15 +9,12 @@ const db = require("../config/db");
 =========================== */
 exports.getNotifications = async (req, res) => {
   try {
-    const userId = Number(req.query.user_id) || null;
-    const role = req.query.role || null;
+    // Identity comes from the verified token, never from the query string —
+    // otherwise any logged-in user could read anyone else's notifications
+    // just by passing a different user_id.
+    const userId = req.user.id;
+    const role = req.user.role;
     const limit = Number(req.query.limit) || 20;
-
-    if (!userId || !role) {
-      return res.status(400).json({
-        message: "user_id and role are required.",
-      });
-    }
 
     const [notifications] = await db.query(
       `
@@ -59,7 +56,24 @@ exports.markAsRead = async (req, res) => {
   try {
     const { id } = req.params;
 
-    await db.query("UPDATE notifications SET is_read = 1 WHERE id = ?", [id]);
+    // Only touch it if it's actually addressed to this user (directly, or
+    // broadcast to their role) — otherwise any authenticated user could
+    // flip the read state on someone else's notification by id.
+    const [result] = await db.query(
+      `
+        UPDATE notifications
+        SET is_read = 1
+        WHERE id = ?
+          AND ((user_id = ?) OR (user_id IS NULL AND role = ?))
+      `,
+      [id, req.user.id, req.user.role],
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        message: "Notification not found.",
+      });
+    }
 
     return res.json({ message: "Notification marked as read" });
   } catch (error) {
@@ -76,13 +90,8 @@ exports.markAsRead = async (req, res) => {
 =========================== */
 exports.markAllAsRead = async (req, res) => {
   try {
-    const { user_id, role } = req.body;
-
-    if (!user_id || !role) {
-      return res.status(400).json({
-        message: "user_id and role are required.",
-      });
-    }
+    const user_id = req.user.id;
+    const role = req.user.role;
 
     await db.query(
       `
