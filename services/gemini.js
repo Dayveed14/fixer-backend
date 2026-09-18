@@ -4,82 +4,142 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
-// Helper function to handle retries with exponential backoff
+// --------------------------------------------------
+// Generate content with retry
+// --------------------------------------------------
+
 async function generateWithRetry(payload, retries = 3, delay = 1000) {
   try {
     return await ai.models.generateContent(payload);
   } catch (err) {
-    // Check if error is a 503 (Unavailable) or overloaded status
-    if (
-      retries > 0 &&
-      (err.status === 503 ||
-        err.code === 503 ||
-        /unavailable|high demand/i.test(err.message))
-    ) {
+    const isTemporaryError =
+      err.status === 503 ||
+      err.code === 503 ||
+      /unavailable|high demand|overloaded/i.test(err.message || "");
+
+    if (retries > 0 && isTemporaryError) {
       console.warn(
-        `Gemini is experiencing high demand (503). Retrying in ${delay}ms... (${retries} attempts left)`,
+        `Gemini temporarily unavailable. Retrying in ${delay}ms... (${retries} attempts left)`,
       );
+
       await new Promise((resolve) => setTimeout(resolve, delay));
-      return generateWithRetry(payload, retries - 1, delay * 2); // Double the delay each time
+
+      return generateWithRetry(payload, retries - 1, delay * 2);
     }
+
     throw err;
   }
 }
 
-async function analyzeIssue(data) {
-  try {
-    const { deviceType, brand, primaryFault, selectedSymptoms, description } =
-      data;
+// --------------------------------------------------
+// AI Diagnosis
+// --------------------------------------------------
 
-    const prompt = `
+async function analyzeIssue(data) {
+  const {
+    deviceType,
+    brand,
+    primaryFault,
+    selectedSymptoms = [],
+    description = "",
+  } = data;
+
+  const prompt = `
+You are Fixer's AI technical diagnosis assistant.
+
 You are an experienced computer hardware and software technician.
 
-Analyze the customer's computer issue.
+Analyze the customer's device problem using the information provided below.
 
-Device Type:
+DEVICE TYPE:
 ${deviceType}
 
-Brand:
-${brand}
+BRAND / MODEL:
+${brand || "Not provided"}
 
-Primary Fault:
+PRIMARY FAULT:
 ${primaryFault}
 
-Selected Symptoms:
-${selectedSymptoms}
+SELECTED SYMPTOMS:
+${selectedSymptoms.join(", ") || "None provided"}
 
-Description:
-${description}
+CUSTOMER DESCRIPTION:
+${description || "No additional description provided"}
 
-Return ONLY valid JSON in this exact format:
+Your task is to:
+
+1. Identify the most likely problem.
+2. Estimate your confidence from 0 to 100.
+3. Determine the severity.
+4. List the most likely causes.
+5. Provide safe troubleshooting steps the customer can try.
+6. Determine whether the customer should book a technician.
+7. Determine whether mail-in repair may be appropriate.
+
+Important:
+
+- Do not claim certainty when the symptoms are ambiguous.
+- Do not recommend dangerous electrical or hardware procedures to an ordinary customer.
+- If the problem could involve electrical damage, liquid damage, burning smell, smoke, swollen battery, or other safety risks, recommend professional service.
+- Keep troubleshooting steps practical and easy to understand.
+- Do not invent information that was not provided.
+
+Return ONLY valid JSON using this exact structure:
 
 {
-  "likelyProblem":"",
-  "confidence":0,
-  "severity":"",
-  "causes":[],
-  "steps":[],
-  "estimatedRepair":"",
-  "bookTechnician":false,
-  "mailInRepair":false
+  "likelyProblem": "",
+  "confidence": 0,
+  "severity": "",
+  "causes": [],
+  "steps": [],
+  "estimatedRepair": "",
+  "bookTechnician": false,
+  "mailInRepair": false
 }
 `;
 
-    // Use the retry wrapper instead of direct call
+  try {
+    // --------------------------------------------------
+    // Primary model
+    // --------------------------------------------------
+
     const response = await generateWithRetry({
-      model: "gemini-3.7-flash",
+      model: "gemini-3.8-flash",
       contents: prompt,
+
+      config: {
+        responseMimeType: "application/json",
+      },
     });
 
-    const text = response.text
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
-
-    return JSON.parse(text);
+    return JSON.parse(response.text.trim());
   } catch (err) {
-    console.error("Gemini Error:", err);
-    throw err;
+    console.warn("Primary Gemini model failed. Trying fallback model...");
+
+    // --------------------------------------------------
+    // Fallback model
+    // --------------------------------------------------
+
+    try {
+      const fallbackResponse = await generateWithRetry(
+        {
+          model: "gemini-3.7-flash",
+          contents: prompt,
+
+          config: {
+            responseMimeType: "application/json",
+          },
+        },
+        2,
+        1000,
+      );
+
+      return JSON.parse(fallbackResponse.text.trim());
+    } catch (fallbackError) {
+      console.error("Gemini Error:", fallbackError);
+
+      throw fallbackError;
+    }
   }
 }
 
