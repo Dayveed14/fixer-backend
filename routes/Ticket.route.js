@@ -16,7 +16,10 @@ const { verifyToken, authorize } = require("../middleware/auth");
 
 router.post("/", verifyToken, authorize("admin", "technician"), createTicket);
 
-router.get("/", verifyToken, authorize("admin", "technician"), getTickets);
+// Open to any authenticated role, same reasoning as bookings above —
+// a customer lists their own tickets (?customer_id=me) for their
+// dashboard. Scoping happens in the controller.
+router.get("/", verifyToken, getTickets);
 
 router.get("/active/:technicianId", verifyToken, getActiveTicket);
 

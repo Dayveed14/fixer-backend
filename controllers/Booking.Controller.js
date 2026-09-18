@@ -230,11 +230,14 @@ exports.createBooking = async (req, res) => {
 
 exports.getBookings = async (req, res) => {
   try {
-    const userId = Number(req.query.user_id) || null;
-    // Technicians can only ever list their own bookings — the token's
-    // identity wins over anything passed in the query string, so a
-    // technician can't page through another technician's bookings by
-    // guessing an id. Admins can filter by whichever technician_id they want.
+    // Everyone gets scoped to their own bookings except admins:
+    // - a customer only ever sees their own (user_id forced to self)
+    // - a technician only ever sees their own queue (technician_id forced to self)
+    // - an admin can filter by whichever user_id/technician_id they pass
+    const userId =
+      req.user.role === "user"
+        ? req.user.id
+        : Number(req.query.user_id) || null;
     const technicianId =
       req.user.role === "technician"
         ? req.user.id
@@ -632,9 +635,31 @@ exports.updateBookingStatus = async (req, res) => {
       });
     }
 
+    // Customers may only cancel their own booking — nothing else.
     // Technicians may only move bookings that are actually assigned to
-    // them; admins can update any booking.
-    if (req.user.role === "technician") {
+    // them. Admins can set any status on any booking.
+    if (req.user.role === "user") {
+      if (status !== "cancelled") {
+        return res.status(403).json({
+          message: "You can only cancel your own booking.",
+        });
+      }
+
+      const [[booking]] = await db.query(
+        "SELECT user_id FROM bookings WHERE id = ?",
+        [id],
+      );
+
+      if (!booking) {
+        return res.status(404).json({ message: "Booking not found." });
+      }
+
+      if (booking.user_id !== req.user.id) {
+        return res.status(403).json({
+          message: "You do not have permission to cancel this booking.",
+        });
+      }
+    } else if (req.user.role === "technician") {
       const [[booking]] = await db.query(
         "SELECT technician_id FROM bookings WHERE id = ?",
         [id],

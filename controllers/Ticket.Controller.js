@@ -78,9 +78,12 @@ exports.createTicket = async (req, res) => {
 exports.getTickets = async (req, res) => {
   try {
     const limit = Number(req.query.limit) || null;
-    const customerId = Number(req.query.customer_id) || null;
-    // Technicians only ever see their own tickets — token identity wins
-    // over the query string, same as the bookings list.
+    // Same self-scoping as bookings: customers and technicians are
+    // always forced to their own id, admins can filter by anyone's.
+    const customerId =
+      req.user.role === "user"
+        ? req.user.id
+        : Number(req.query.customer_id) || null;
     const technicianId =
       req.user.role === "technician"
         ? req.user.id
