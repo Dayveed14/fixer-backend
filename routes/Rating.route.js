@@ -6,7 +6,7 @@ const {
   createRating,
   getTechnicianRatings,
 } = require("../controllers/Rating.Controller");
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, authorize } = require("../middleware/auth");
 
 router.post("/", verifyToken, authorize("user"), createRating);
 
