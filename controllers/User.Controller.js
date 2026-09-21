@@ -1,6 +1,7 @@
 const db = require("../config/db");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const { COOKIE_NAME, cookieOptions } = require("../config/cookie");
 
 /* ===========================
    REGISTER USER
@@ -231,6 +232,12 @@ exports.loginUser = async (req, res) => {
       },
     );
 
+    // Set the token as an httpOnly cookie — this is the actual auth
+    // mechanism from here on. JavaScript in the browser can never read
+    // or steal this value, unlike the old approach of returning it in
+    // the body for the frontend to stash in localStorage.
+    res.cookie(COOKIE_NAME, token, cookieOptions);
+
     return res.json({
       id: user.id,
       first_name: user.first_name,
@@ -238,8 +245,44 @@ exports.loginUser = async (req, res) => {
       email: user.email,
       phone: user.phone,
       role: user.role,
-      token,
     });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Internal Server Error",
+    });
+  }
+};
+
+/* ===========================
+   LOGOUT USER
+   Clears the auth cookie. The frontend can't clear an httpOnly cookie
+   itself, so it has to ask the server to do it.
+=========================== */
+exports.logoutUser = async (req, res) => {
+  res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: undefined });
+
+  return res.json({ message: "Logged out." });
+};
+
+/* ===========================
+   GET CURRENT USER
+   Lets the frontend restore "who am I" on page load/refresh purely from
+   the cookie, without needing to have kept anything in localStorage.
+=========================== */
+exports.getMe = async (req, res) => {
+  try {
+    const [result] = await db.query(
+      "SELECT id, first_name, last_name, email, phone, role FROM users WHERE id = ?",
+      [req.user.id],
+    );
+
+    if (result.length === 0) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    return res.json(result[0]);
   } catch (error) {
     console.error(error);
 

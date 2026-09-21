@@ -1,7 +1,10 @@
 const express = require("express");
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
 const path = require("path");
 require("dotenv").config();
+
+const { COOKIE_NAME } = require("./config/cookie");
 
 const userApi = require("./routes/User.route");
 const testApi = require("./routes/Test.route");
@@ -59,6 +62,36 @@ app.use(express.json());
 
 app.use(express.urlencoded({ extended: true }));
 
+app.use(cookieParser());
+
+// CSRF guard: moving auth from a Bearer header (which a malicious page
+// can't attach on your behalf) to a cookie (which the browser attaches
+// automatically, even cross-site, since it has to be SameSite=None for
+// the frontend/backend's different domains) reopens CSRF. This closes
+// it cheaply: the real frontend sends a custom header on every
+// state-changing request; a plain cross-site form post can't add custom
+// headers at all, and a cross-site fetch/XHR trying to add one triggers
+// a CORS preflight that the origin allowlist above already blocks. Only
+// enforced when a session cookie is actually present — Bearer-token
+// clients (mobile apps, Postman, the test suite) aren't affected.
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+app.use((req, res, next) => {
+  const hasSessionCookie = Boolean(req.cookies?.[COOKIE_NAME]);
+
+  if (
+    MUTATING_METHODS.has(req.method) &&
+    hasSessionCookie &&
+    req.headers["x-fixer-client"] !== "web"
+  ) {
+    return res.status(403).json({
+      message: "Request blocked.",
+    });
+  }
+
+  return next();
+});
+
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 /* Test Database Connection */
@@ -107,6 +140,10 @@ app.get("/", (req, res) => {
 
 /* Server */
 
-app.listen(PORT, () => {
-  console.log(`Server Running on Port ${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server Running on Port ${PORT}`);
+  });
+}
+
+module.exports = app;

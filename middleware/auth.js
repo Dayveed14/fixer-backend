@@ -1,16 +1,29 @@
 const jwt = require("jsonwebtoken");
+const { COOKIE_NAME } = require("../config/cookie");
 
 /* ===========================
    VERIFY TOKEN
-   Requires a valid "Authorization: Bearer <token>" header.
+   Reads the token from the httpOnly cookie the browser sends
+   automatically, or from an "Authorization: Bearer <token>" header —
+   whichever is present. The cookie is how the web app authenticates
+   (JS never touches the token at all); the header stays supported for
+   non-browser clients and for the test suite, which has no browser to
+   hold a cookie for it.
    On success, attaches the decoded payload ({ id, email, role, iat, exp })
    to req.user for downstream handlers and authorize() to use.
 =========================== */
 function verifyToken(req, res, next) {
-  const header = req.headers.authorization || "";
-  const [scheme, token] = header.split(" ");
+  let token = req.cookies?.[COOKIE_NAME];
 
-  if (scheme !== "Bearer" || !token) {
+  if (!token) {
+    const header = req.headers.authorization || "";
+    const [scheme, headerToken] = header.split(" ");
+    if (scheme === "Bearer" && headerToken) {
+      token = headerToken;
+    }
+  }
+
+  if (!token) {
     return res.status(401).json({
       message: "Authentication required. Please log in.",
     });

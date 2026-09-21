@@ -26,4 +26,17 @@ const paymentFlowLimiter = rateLimit({
   },
 });
 
-module.exports = { contactLimiter, paymentFlowLimiter };
+// Login: brute-force protection. 10 attempts per 15 minutes per IP is
+// enough for someone who mistypes their password a few times, tight for
+// a script trying to guess one.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    message: "Too many login attempts. Please try again in a little while.",
+  },
+});
+
+module.exports = { contactLimiter, paymentFlowLimiter, loginLimiter };
