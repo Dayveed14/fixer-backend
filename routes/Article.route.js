@@ -22,7 +22,7 @@ router.get("/published", article.getPublishedArticles);
 
 router.get("/", verifyToken, authorize("admin"), article.getArticles);
 
-router.get("/:id", article.getArticle);
+router.get("/:slug", article.getArticle);
 
 router.put(
   "/:id",

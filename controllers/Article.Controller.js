@@ -81,12 +81,28 @@ ORDER BY created_at DESC`,
 
 exports.getArticle = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { slug } = req.params;
 
     const [result] = await db.query(
-      "SELECT * FROM articles WHERE id=?",
-
-      [id],
+      `SELECT
+        articles.id,
+        articles.title,
+        articles.slug,
+        articles.excerpt,
+        articles.content,
+        articles.hero_image,
+        articles.image_alt,
+        articles.category,
+        articles.tags,
+        articles.views,
+        articles.created_at,
+        CONCAT(users.first_name, ' ', users.last_name) AS author
+      FROM articles
+      INNER JOIN users
+        ON users.id = articles.author_id
+      WHERE articles.slug = ?
+        AND articles.status = 'published'`,
+      [slug],
     );
 
     if (result.length === 0) {
@@ -97,6 +113,8 @@ exports.getArticle = async (req, res) => {
 
     res.json(result[0]);
   } catch (err) {
+    console.error(err);
+
     res.status(500).json({
       message: "Server Error",
     });
@@ -228,8 +246,7 @@ exports.getPublishedArticles = async (req, res) => {
         articles.tags,
         articles.views,
         articles.created_at,
-        users.first_name,
-        users.last_name
+        CONCAT(users.first_name, ' ', users.last_name) AS author
 
       FROM articles
 
@@ -239,8 +256,6 @@ exports.getPublishedArticles = async (req, res) => {
       WHERE articles.status = 'published'
 
       ORDER BY articles.created_at DESC
-
-      LIMIT 4
     `);
 
     res.status(200).json(articles);

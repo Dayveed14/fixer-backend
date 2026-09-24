@@ -87,12 +87,12 @@ ORDER BY created_at DESC`,
 
 exports.getVideo = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { slug } = req.params;
 
     const [result] = await db.query(
-      "SELECT * FROM diy_videos WHERE id=?",
+      "SELECT * FROM diy_videos WHERE slug=?",
 
-      [id],
+      [slug],
     );
 
     if (result.length === 0) {
@@ -113,16 +113,8 @@ exports.updateVideo = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const {
-      title,
-      slug,
-      excerpt,
-      content,
-      category,
-      tags,
-      featured,
-      status,
-    } = req.body;
+    const { title, slug, excerpt, content, category, tags, featured, status } =
+      req.body;
 
     let sql = `
 UPDATE diy_videos

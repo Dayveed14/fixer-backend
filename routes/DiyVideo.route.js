@@ -22,7 +22,7 @@ router.get("/published", diyVideo.getPublishedVideos);
 
 router.get("/", verifyToken, authorize("admin"), diyVideo.getVideos);
 
-router.get("/:id", diyVideo.getVideo);
+router.get("/:slug", diyVideo.getVideo);
 
 router.put(
   "/:id",
