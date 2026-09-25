@@ -63,6 +63,47 @@ describe("POST /api/diagnosis/run (public)", () => {
 
     expect(res.status).toBe(200);
     expect(analyzeIssue).toHaveBeenCalledTimes(1);
+    // The controller tags this itself — Gemini's own response (see the
+    // mock) has no source/success field of its own to rely on.
+    expect(res.body.success).toBe(true);
     expect(res.body.source).toBe("ai");
+    expect(res.body.likelyProblem).toBe("Mock AI diagnosis");
+  });
+
+  it("regression: a query about one thing doesn't false-positive match an unrelated row just because of shared filler words like 'not'/'working'", async () => {
+    // The exact bug: "mouse not working" scored 50 points against a
+    // totally unrelated "USB-C display output not working" row, purely
+    // from "not" and "working" both appearing in each — "mouse" itself
+    // matched nothing. This must now correctly fall through to AI.
+    db.query
+      .mockResolvedValueOnce([{ insertId: 1 }])
+      .mockResolvedValueOnce([
+        [
+          {
+            device_type: "Laptop",
+            primary_fault: "USB-C display output not working",
+            keywords: "USB-C video, Type-C display",
+            possible_cause: "port capability, cable, graphics driver",
+          },
+          {
+            device_type: "Laptop",
+            primary_fault: "network is not detected",
+            keywords: "network, internet, connectivity, not detected, missing, not found",
+            possible_cause: "DNS, DHCP, routing",
+          },
+        ],
+      ]);
+
+    const res = await request(app).post("/api/diagnosis/run").send({
+      deviceType: "Laptop",
+      primaryFault: "mouse not working",
+      description: "mouse doesnt work",
+    });
+
+    expect(res.status).toBe(200);
+    // Neither unrelated row should have been accepted as a match —
+    // must fall through to AI, not claim a false knowledge-base hit.
+    expect(res.body.source).toBe("ai");
+    expect(analyzeIssue).toHaveBeenCalledTimes(1);
   });
 });

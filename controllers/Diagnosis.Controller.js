@@ -93,6 +93,21 @@ exports.runDiagnosis = async (req, res) => {
       "computer",
       "laptop",
       "phone",
+      // These appear in almost every row once negation synonyms are
+      // normalized ("won't"/"can't"/"doesn't"/"don't" all become "not"),
+      // so on their own they don't discriminate between issues at all —
+      // without excluding them, "X not working" can score high against
+      // literally any "not working" row regardless of what X is.
+      "not",
+      "no",
+      "cannot",
+      "working",
+      "work",
+      "issue",
+      "issues",
+      "problem",
+      "problems",
+      "wrong",
     ];
 
     function normalize(text = "") {
@@ -119,6 +134,11 @@ exports.runDiagnosis = async (req, res) => {
 
     function scoreIssue(issue, form) {
       let score = 0;
+      // Tracks whether any point actually came from a meaningful,
+      // discriminating word — as opposed to only from generic filler
+      // that happens to appear in most rows. Filler-only matches must
+      // never be enough to call something a match on their own.
+      let hadRealMatch = false;
 
       //-----------------------------------
       // Exact / Partial Primary Fault
@@ -132,6 +152,7 @@ exports.runDiagnosis = async (req, res) => {
         normalizedFault.includes(normalizedIssueFault)
       ) {
         score += 50;
+        hadRealMatch = true;
       }
 
       //-----------------------------------
@@ -145,6 +166,7 @@ exports.runDiagnosis = async (req, res) => {
         issueWords.forEach((dbWord) => {
           if (dbWord.includes(word) || word.includes(dbWord)) {
             score += 20;
+            hadRealMatch = true;
           }
         });
       });
@@ -164,6 +186,7 @@ exports.runDiagnosis = async (req, res) => {
         dbKeywords.forEach((keyword) => {
           if (s.includes(keyword) || keyword.includes(s)) {
             score += 10;
+            hadRealMatch = true;
           }
         });
       });
@@ -184,6 +207,7 @@ exports.runDiagnosis = async (req, res) => {
       descriptionWords.forEach((word) => {
         if (searchableText.includes(word)) {
           score += 5;
+          hadRealMatch = true;
         }
       });
 
@@ -202,6 +226,7 @@ exports.runDiagnosis = async (req, res) => {
 
         if (searchableBrand.includes(normalizedBrand)) {
           score += 10;
+          hadRealMatch = true;
         }
       }
 
@@ -213,7 +238,12 @@ exports.runDiagnosis = async (req, res) => {
         score += 10;
       }
 
-      return score;
+      // Safety net: even with the expanded stopword list, this is a
+      // second line of defense so a future filler word we haven't
+      // thought of can't silently start producing false "matches"
+      // again — a row can only ever count as relevant if something
+      // meaningful actually matched.
+      return hadRealMatch ? score : 0;
     }
 
     const ranked = issues
@@ -268,7 +298,16 @@ exports.runDiagnosis = async (req, res) => {
       description,
     });
 
-    return res.json(aiResult);
+    // Tag this explicitly rather than leaving the frontend to infer
+    // "not knowledge_base" == AI from the shape of the response —
+    // analyzeIssue() returns Gemini's raw parsed JSON, which has no
+    // field of its own identifying where it came from.
+    return res.json({
+      success: true,
+      source: "ai",
+      requestId: request.insertId,
+      ...aiResult,
+    });
   } catch (err) {
     console.log(err);
 
