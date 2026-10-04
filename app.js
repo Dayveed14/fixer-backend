@@ -42,6 +42,7 @@ const allowedOrigins = [
   "https://fixer-vite.vercel.app",
   "https://fixerng.app",
   "https://www.fixerng.app",
+  "https://localhost",
 ];
 
 app.use(
