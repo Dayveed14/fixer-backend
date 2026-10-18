@@ -85,13 +85,13 @@ ORDER BY created_at DESC`,
   }
 };
 
+/* Public — GET /api/diy-videos/:slug — published videos only. */
 exports.getVideo = async (req, res) => {
   try {
     const { slug } = req.params;
 
     const [result] = await db.query(
-      "SELECT * FROM diy_videos WHERE slug=?",
-
+      "SELECT * FROM diy_videos WHERE slug = ? AND status = 'published'",
       [slug],
     );
 
@@ -106,6 +106,26 @@ exports.getVideo = async (req, res) => {
     res.status(500).json({
       message: "Server Error",
     });
+  }
+};
+
+/* Admin — GET /api/diy-videos/manage/:idOrSlug — any status. */
+exports.getVideoForAdmin = async (req, res) => {
+  try {
+    const { idOrSlug } = req.params;
+    const [result] = await db.query(
+      "SELECT * FROM diy_videos WHERE id = ? OR slug = ?",
+      [idOrSlug, idOrSlug],
+    );
+
+    if (result.length === 0) {
+      return res.status(404).json({ message: "Video not found" });
+    }
+
+    res.json(result[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server Error" });
   }
 };
 

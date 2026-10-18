@@ -24,7 +24,9 @@ describe("GET /api/stats/dashboard (admin-only)", () => {
       .mockResolvedValueOnce([[{ totalTechnicians: 3 }]])
       .mockResolvedValueOnce([[{ openTickets: 4 }]])
       .mockResolvedValueOnce([[{ totalDevices: 20 }]])
-      .mockResolvedValueOnce([[{ unassignedCalls: 1 }]])
+      .mockResolvedValueOnce([[{ unassignedBookings: 1 }]])
+      .mockResolvedValueOnce([[{ repairsToday: 2 }]])
+      .mockResolvedValueOnce([[{ pendingPaidRepairs: 5 }]])
       .mockResolvedValueOnce([[{ currentMonthRevenue: 50000 }]])
       .mockResolvedValueOnce([[{ lastMonthRevenue: 40000 }]]);
 
@@ -34,6 +36,10 @@ describe("GET /api/stats/dashboard (admin-only)", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.totalUsers).toBe(10);
+    expect(res.body.repairsToday).toBe(2);
+    // unassigned bookings + paid repairs not yet delivered
+    expect(res.body.pendingApprovals).toBe(6);
+    expect(res.body.unassignedCalls).toBe(6); // kept for older dashboards
     expect(res.body.revenueChangePercent).toBe(25);
   });
 });

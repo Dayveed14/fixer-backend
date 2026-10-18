@@ -22,6 +22,16 @@ router.get("/published", article.getPublishedArticles);
 
 router.get("/", verifyToken, authorize("admin"), article.getArticles);
 
+// Admin: any status (draft, published, none) — for viewing and editing.
+// Declared before "/:slug" so "manage" isn't read as a slug.
+router.get(
+  "/manage/:slug",
+  verifyToken,
+  authorize("admin"),
+  article.getArticleForAdmin,
+);
+
+// Public: published only.
 router.get("/:slug", article.getArticle);
 
 router.put(

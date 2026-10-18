@@ -22,6 +22,15 @@ router.get("/published", diyVideo.getPublishedVideos);
 
 router.get("/", verifyToken, authorize("admin"), diyVideo.getVideos);
 
+// Admin: any status, by id or slug — for viewing and editing.
+router.get(
+  "/manage/:idOrSlug",
+  verifyToken,
+  authorize("admin"),
+  diyVideo.getVideoForAdmin,
+);
+
+// Public: published only.
 router.get("/:slug", diyVideo.getVideo);
 
 router.put(

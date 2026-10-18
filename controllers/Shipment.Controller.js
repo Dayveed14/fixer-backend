@@ -17,6 +17,7 @@ const {
 } = require("../utils/schedule");
 const escapeHtml = require("../utils/escapeHtml");
 const sendMail = require("../services/mailService");
+const createNotification = require("../services/notificationService");
 
 const { STATUS_LABELS, decorate, ownsShipment, recordEvent, notify, naira } = lifecycle;
 
@@ -349,7 +350,11 @@ exports.getShipment = async (req, res) => {
       return res.status(404).json({ message: "Shipment not found" });
     }
 
-    if (req.user.role !== "admin" && !ownsShipment(shipment, req.user)) {
+    const assignedTechnician =
+      req.user.role === "technician" &&
+      Number(shipment.technician_id) === Number(req.user.id);
+
+    if (req.user.role !== "admin" && !assignedTechnician && !ownsShipment(shipment, req.user)) {
       return res.status(403).json({
         message: "You do not have permission to view this shipment.",
       });
@@ -454,6 +459,10 @@ exports.updateShipmentStatus = async (req, res) => {
         message = "Waiting for the customer to approve or decline the quote.";
       } else if (shipment.status === "waiting_approval" && shipment.approval_status === "declined") {
         message = "The customer declined the repair — send the device back (Ready for delivery).";
+      } else if (shipment.status === "repair" && !shipment.repair_outcome) {
+        message = "Waiting for the technician to mark the device repaired.";
+      } else if (shipment.status === "repair" && shipment.repair_outcome === "unrepairable") {
+        message = "The technician couldn't repair it — send the device back (Ready for delivery).";
       }
       return res.status(409).json({ message, allowed });
     }
@@ -461,8 +470,25 @@ exports.updateShipmentStatus = async (req, res) => {
     let extra = "";
     const params = [status];
     let hours = null;
+    let technician = null;
 
-    if (status === "ready_for_delivery") {
+    if (status === "repair") {
+      // Starting the repair = assigning it to a technician.
+      const technicianId = Number(req.body?.technician_id);
+      if (!Number.isInteger(technicianId) || technicianId <= 0) {
+        return res.status(400).json({ message: "Choose a technician to start the repair." });
+      }
+      const [techRows] = await db.query(
+        "SELECT id, first_name, last_name, email FROM users WHERE id = ? AND role = 'technician'",
+        [technicianId],
+      );
+      technician = techRows[0];
+      if (!technician) {
+        return res.status(404).json({ message: "Technician not found." });
+      }
+      extra = ", technician_id = ?, repair_outcome = NULL, repair_note = NULL, repaired_at = NULL";
+      params.push(technician.id);
+    } else if (status === "ready_for_delivery") {
       hours = (await pricing.getSettings()).delivery_confirm_hours;
       extra = ", ready_at = NOW(), delivery_confirm_by = DATE_ADD(NOW(), INTERVAL ? HOUR)";
       params.push(hours);
@@ -486,13 +512,31 @@ exports.updateShipmentStatus = async (req, res) => {
     await recordEvent(db, {
       shipmentId: shipment.id,
       status,
-      note,
+      note: technician
+        ? [`Assigned to ${technician.first_name} ${technician.last_name}.`, note].filter(Boolean).join(" ")
+        : note,
       actorRole: req.user.role,
       actorUserId: req.user.id,
     });
 
-    const updated = { ...shipment, status };
+    const updated = { ...shipment, status, technician_id: technician ? technician.id : shipment.technician_id };
     await notify(updated, status);
+
+    if (technician) {
+      try {
+        await createNotification({
+          user_id: technician.id,
+          role: "technician",
+          type: "shipment",
+          title: "New repair assigned",
+          message: `${shipment.reference}: ${shipment.brand || ""} ${shipment.device} — ${shipment.diagnosis_summary || shipment.fault}`.replace(/\s+/g, " ").slice(0, 250),
+          reference_id: shipment.id,
+          reference_type: "shipment",
+        });
+      } catch (notifyError) {
+        console.error("Technician notification failed:", notifyError.message);
+      }
+    }
 
     // Email 3 of 3 to the customer: ready for delivery.
     if (status === "ready_for_delivery") {
@@ -802,6 +846,123 @@ exports.confirmDelivery = async (req, res) => {
     return res.json({ message: "Delivery confirmed", status: "delivered" });
   } catch (err) {
     return handleError(res, err, "Confirm delivery error:");
+  }
+};
+
+/* ===========================
+   TECHNICIAN: MY REPAIRS — GET /api/shipments/assigned
+   Shipments assigned to the logged-in technician (admins see all
+   assigned shipments). Includes each shipment's timeline.
+=========================== */
+exports.getAssignedRepairs = async (req, res) => {
+  try {
+    const [rows] =
+      req.user.role === "admin"
+        ? await db.query(
+            "SELECT * FROM shipments WHERE technician_id IS NOT NULL ORDER BY id DESC",
+          )
+        : await db.query(
+            "SELECT * FROM shipments WHERE technician_id = ? ORDER BY id DESC",
+            [req.user.id],
+          );
+
+    const events = await lifecycle.getEvents(rows.map((r) => r.id));
+    res.json(
+      rows.map((r) => ({
+        ...decorate(r),
+        events: events.filter((e) => Number(e.shipment_id) === Number(r.id)),
+      })),
+    );
+  } catch (err) {
+    handleError(res, err, "Assigned repairs error:");
+  }
+};
+
+/* ===========================
+   TECHNICIAN: REPORT THE REPAIR — POST /api/shipments/:id/repair-result
+   { outcome: "repaired" | "unrepairable", note? }
+   No amount — the admin already quoted and the customer already paid.
+   Only after this can the admin move the device to quality check (or,
+   if unrepairable, send it back).
+=========================== */
+exports.reportRepairResult = async (req, res) => {
+  try {
+    const { outcome } = req.body || {};
+    const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 500) : "";
+
+    if (!["repaired", "unrepairable"].includes(outcome)) {
+      return res.status(400).json({ message: 'outcome must be "repaired" or "unrepairable".' });
+    }
+
+    if (outcome === "unrepairable" && !note) {
+      return res.status(400).json({ message: "Say why it can't be repaired." });
+    }
+
+    const shipment = await findShipment(req.params.id);
+    if (!shipment) {
+      return res.status(404).json({ message: "Shipment not found" });
+    }
+
+    if (req.user.role === "technician" && Number(shipment.technician_id) !== Number(req.user.id)) {
+      return res.status(403).json({ message: "This repair isn't assigned to you." });
+    }
+
+    if (shipment.status !== "repair") {
+      return res.status(409).json({ message: "This device isn't in repair." });
+    }
+
+    if (shipment.repair_outcome) {
+      return res.status(409).json({ message: "You've already reported this repair." });
+    }
+
+    const [result] = await db.query(
+      `UPDATE shipments
+          SET repair_outcome = ?, repair_note = ?, repaired_at = NOW()
+        WHERE id = ? AND status = 'repair' AND repair_outcome IS NULL`,
+      [outcome, note || null, shipment.id],
+    );
+
+    if (result && result.affectedRows === 0) {
+      return res.status(409).json({ message: "This repair was just updated. Refresh and try again." });
+    }
+
+    await recordEvent(db, {
+      shipmentId: shipment.id,
+      status: "repair",
+      note:
+        outcome === "repaired"
+          ? `Technician marked it repaired.${note ? ` ${note}` : ""}`
+          : `Technician couldn't repair it: ${note}`,
+      actorRole: req.user.role,
+      actorUserId: req.user.id,
+    });
+
+    try {
+      await createNotification({
+        role: "admin",
+        type: "shipment",
+        title:
+          outcome === "repaired"
+            ? `${shipment.reference}: repaired`
+            : `${shipment.reference}: can't be repaired`,
+        message:
+          outcome === "repaired"
+            ? `The technician finished the repair on ${shipment.name}'s ${shipment.device}. Move it to quality check.`
+            : `The technician couldn't repair ${shipment.name}'s ${shipment.device}: ${note}`,
+        reference_id: shipment.id,
+        reference_type: "shipment",
+      });
+    } catch (notifyError) {
+      console.error("Admin notification failed:", notifyError.message);
+    }
+
+    res.json({
+      message: outcome === "repaired" ? "Marked as repaired" : "Marked as unrepairable",
+      repair_outcome: outcome,
+      next_actions: lifecycle.nextActions({ ...shipment, repair_outcome: outcome }),
+    });
+  } catch (err) {
+    handleError(res, err, "Repair result error:");
   }
 };
 

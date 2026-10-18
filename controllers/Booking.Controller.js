@@ -16,6 +16,7 @@ const {
   LEAD_MINUTES,
 } = require("../utils/schedule");
 const escapeHtml = require("../utils/escapeHtml");
+const { createVideoMeeting } = require("../services/meetingService");
 
 const MAX_ISSUE_LENGTH = 2000;
 const MAX_DEVICE_LENGTH = 60;
@@ -186,6 +187,30 @@ exports.createBooking = async (req, res) => {
 
     const customerName = `${customer.first_name} ${customer.last_name}`;
     const customerEmail = customer.email;
+
+    // Video calls get their meeting link now, so the customer has it
+    // immediately and the technician just opens it at the session time.
+    let meetingUrl = null;
+    if (typeInfo.db === "video") {
+      try {
+        const meeting = await createVideoMeeting({
+          bookingReference: booking_reference,
+          startsAt: `${booking_date}T${bookingTime}+01:00`,
+          durationMinutes: 30,
+          customerEmail,
+          summary: `Fixer video support ${booking_reference}`,
+        });
+        meetingUrl = meeting.url;
+        await db.query(
+          "UPDATE bookings SET meeting_url = ?, meeting_provider = ? WHERE id = ?",
+          [meeting.url, meeting.provider, bookingId],
+        );
+      } catch (meetingError) {
+        // Staff can create it later from the appointment.
+        console.error("Meeting link not saved:", meetingError.message);
+      }
+    }
+
     const safeName = escapeHtml(customerName);
     const safeIssue = escapeHtml(issue_summary || "N/A");
     const timeLabel = bookingTime.slice(0, 5);
@@ -256,6 +281,7 @@ exports.createBooking = async (req, res) => {
       id: bookingId,
       booking_reference,
       amount: amountNaira,
+      meeting_url: meetingUrl,
     });
   } catch (error) {
     if (error.name === "PaymentError") {
@@ -314,6 +340,8 @@ exports.getBookings = async (req, res) => {
         bookings.device,
         bookings.amount,
         bookings.payment_status,
+        bookings.meeting_url,
+        customer.phone AS customer_phone,
         bookings.technician_id,
         CONCAT(tech.first_name, ' ', tech.last_name) AS technician_name,
         bookings.ticket_id,
@@ -400,6 +428,8 @@ exports.getBookingById = async (req, res) => {
           bookings.device,
           bookings.amount,
           bookings.payment_status,
+          bookings.meeting_url,
+          customer.phone AS customer_phone,
           bookings.technician_id,
           CONCAT(tech.first_name, ' ', tech.last_name) AS technician_name,
           tech.email AS technician_email,
@@ -731,6 +761,16 @@ exports.updateBookingStatus = async (req, res) => {
 
     await db.query("UPDATE bookings SET status = ? WHERE id = ?", [status, id]);
 
+    // Keep the linked ticket in step, so finishing the call finishes the
+    // job everywhere. No amount is needed — the customer already paid.
+    const ticketStatus = { completed: "Completed", cancelled: "Cancelled", missed: "Cancelled" }[status];
+    if (ticketStatus === "Completed") {
+      await db.query(
+        "UPDATE tickets SET status = 'Completed' WHERE id = (SELECT ticket_id FROM bookings WHERE id = ?)",
+        [id],
+      );
+    }
+
     return res.json({
       message: "Booking status updated",
     });
@@ -761,6 +801,7 @@ exports.startRemoteSession = async (req, res) => {
           bookings.id,
           bookings.status,
           bookings.booking_reference,
+          bookings.support_type,
           bookings.technician_id,
           CONCAT(customer.first_name, ' ', customer.last_name) AS customer_name,
           customer.email AS customer_email,
@@ -784,6 +825,17 @@ exports.startRemoteSession = async (req, res) => {
     if (req.user.role === "technician" && booking.technician_id !== req.user.id) {
       return res.status(403).json({
         message: "You are not assigned to this booking.",
+      });
+    }
+
+    // MeshCentral is only for remote-support bookings. Voice calls are
+    // made by the technician; video calls use the booking's meeting link.
+    if (booking.support_type && booking.support_type !== "remote_desktop") {
+      return res.status(400).json({
+        message:
+          booking.support_type === "video"
+            ? "This is a video call — open its meeting link instead."
+            : "This is a voice call — call the customer instead.",
       });
     }
 
@@ -831,5 +883,56 @@ exports.startRemoteSession = async (req, res) => {
     return res.status(500).json({
       message: error.message || "Internal Server Error",
     });
+  }
+};
+
+/* ===========================
+   CREATE / REPLACE A VIDEO MEETING LINK (staff)
+   POST /api/bookings/:id/meeting — for video bookings whose link
+   couldn't be created at booking time, or needs replacing.
+=========================== */
+exports.createMeetingLink = async (req, res) => {
+  try {
+    const [[booking]] = await db.query(
+      `SELECT bookings.id, bookings.booking_reference, bookings.support_type,
+              bookings.booking_date, bookings.booking_time, bookings.technician_id,
+              customer.email AS customer_email
+         FROM bookings
+         INNER JOIN users AS customer ON customer.id = bookings.user_id
+        WHERE bookings.id = ?`,
+      [req.params.id],
+    );
+
+    if (!booking) return res.status(404).json({ message: "Booking not found." });
+
+    if (req.user.role === "technician" && booking.technician_id !== req.user.id) {
+      return res.status(403).json({ message: "You are not assigned to this booking." });
+    }
+
+    if (booking.support_type !== "video") {
+      return res.status(400).json({ message: "Only video calls have a meeting link." });
+    }
+
+    const date =
+      booking.booking_date instanceof Date
+        ? booking.booking_date.toISOString().slice(0, 10)
+        : String(booking.booking_date).slice(0, 10);
+
+    const meeting = await createVideoMeeting({
+      bookingReference: booking.booking_reference,
+      startsAt: `${date}T${String(booking.booking_time).slice(0, 8)}+01:00`,
+      durationMinutes: 30,
+      customerEmail: booking.customer_email,
+    });
+
+    await db.query(
+      "UPDATE bookings SET meeting_url = ?, meeting_provider = ? WHERE id = ?",
+      [meeting.url, meeting.provider, booking.id],
+    );
+
+    return res.json({ meeting_url: meeting.url, provider: meeting.provider });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Internal Server Error" });
   }
 };

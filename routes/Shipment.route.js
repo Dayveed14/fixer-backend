@@ -16,24 +16,36 @@ router.get("/", verifyToken, authorize("admin"), shipment.getShipments);
 
 router.get("/user/:email", verifyToken, shipment.getUserShipment);
 
+// Technician: repairs assigned to me, and report the result.
+// ("/assigned" must come before "/:id".)
+router.get(
+  "/assigned",
+  verifyToken,
+  authorize("admin", "technician"),
+  shipment.getAssignedRepairs,
+);
+router.post(
+  "/:id/repair-result",
+  verifyToken,
+  authorize("admin", "technician"),
+  shipment.reportRepairResult,
+);
+
 router.get("/:id", verifyToken, shipment.getShipment);
 
 // Customer: answer the repair quote, confirm the device came back.
 router.post("/:id/approval", verifyToken, paymentFlowLimiter, shipment.respondToQuote);
 router.post("/:id/confirm-delivery", verifyToken, shipment.confirmDelivery);
 
-// Staff: send the diagnosis + quote.
-router.post(
-  "/:id/quote",
-  verifyToken,
-  authorize("admin", "technician"),
-  shipment.sendQuote,
-);
+// Admin: send the diagnosis + quote.
+router.post("/:id/quote", verifyToken, authorize("admin"), shipment.sendQuote);
 
+// Admin moves the shipment along (technicians report repairs via
+// /repair-result instead).
 router.patch(
   "/:id/status",
   verifyToken,
-  authorize("admin", "technician"),
+  authorize("admin"),
   shipment.updateShipmentStatus,
 );
 

@@ -187,13 +187,20 @@ exports.updateTicketStatus = async (req, res) => {
       }
     }
 
+    // Amount is optional: completing a booked call or a paid repair needs
+    // no amount (the customer already paid). Leaving it out keeps
+    // whatever amount the ticket already has.
     const sql = `
       UPDATE tickets
-      SET status = ?, amount = ?
+      SET status = ?, amount = COALESCE(?, amount)
       WHERE id = ?
     `;
 
-    await db.query(sql, [status, amount ?? null, id]);
+    if (amount !== undefined && amount !== null && amount !== "" && !(Number(amount) >= 0)) {
+      return res.status(400).json({ message: "amount must be a positive number." });
+    }
+
+    await db.query(sql, [status, amount === "" || amount === undefined ? null : amount, id]);
 
     return res.json({
       message: "Ticket status updated",

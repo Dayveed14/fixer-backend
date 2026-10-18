@@ -73,7 +73,10 @@ function nextStatuses(shipment) {
       if (shipment.approval_status === "declined") return ["ready_for_delivery"];
       return [];
     case "repair":
-      return ["quality_check"];
+      // Only after the assigned technician reports back.
+      if (shipment.repair_outcome === "repaired") return ["quality_check"];
+      if (shipment.repair_outcome === "unrepairable") return ["ready_for_delivery"];
+      return [];
     case "quality_check":
       return ["ready_for_delivery"];
     case "ready_for_delivery":
@@ -87,10 +90,14 @@ function nextActions(shipment) {
   const awaitingCustomer =
     shipment.status === "waiting_approval" &&
     (!shipment.approval_status || shipment.approval_status === "pending");
+  const statuses = nextStatuses(shipment);
   return {
-    statuses: nextStatuses(shipment),
+    statuses,
     can_quote: shipment.status === "diagnosis" || awaitingCustomer,
     awaiting_customer: awaitingCustomer,
+    // Starting the repair means choosing a technician.
+    needs_technician: statuses.includes("repair"),
+    awaiting_technician: shipment.status === "repair" && !shipment.repair_outcome,
   };
 }
 

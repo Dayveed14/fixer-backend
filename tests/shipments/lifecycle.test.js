@@ -59,7 +59,6 @@ describe("moving through the lifecycle", () => {
     ["pickup_scheduled", "courier_assigned"],
     ["courier_assigned", "device_collected"],
     ["device_collected", "diagnosis"],
-    ["repair", "quality_check"],
     ["quality_check", "ready_for_delivery"],
     ["ready_for_delivery", "delivered"],
   ])("%s -> %s is allowed", async (from, to) => {
@@ -105,9 +104,11 @@ describe("moving through the lifecycle", () => {
     expect(res.body.message).toMatch(/Waiting for the customer/);
   });
 
-  it("starts repair after approval", async () => {
+  it("starting the repair needs a technician", async () => {
     given(shipment({ status: "waiting_approval", approval_status: "approved" }));
-    expect((await setStatus("repair")).status).toBe(200);
+    const res = await setStatus("repair");
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/technician/);
   });
 
   it("after a decline, goes straight to ready for delivery (no repair)", async () => {
@@ -135,9 +136,8 @@ describe("moving through the lifecycle", () => {
     expect((await setStatus("courier_assigned", ADA)).status).toBe(403);
   });
 
-  it("technicians can", async () => {
-    given(shipment());
-    expect((await setStatus("courier_assigned", TECH)).status).toBe(200);
+  it("technicians can't — they report repairs instead", async () => {
+    expect((await setStatus("courier_assigned", TECH)).status).toBe(403);
   });
 });
 
@@ -231,8 +231,9 @@ describe("diagnosis + quote", () => {
     expect((await quote({ diagnosis: "x", repair_cost: 100 })).status).toBe(409);
   });
 
-  it("customers can't send quotes", async () => {
-    expect((await quote({ diagnosis: "x", repair_cost: 100 }, ADA)).status).toBe(403);
+  it.each([["customers", "ADA"], ["technicians", "TECH"]])("%s can't send quotes", async (_l, who) => {
+    const auth = who === "ADA" ? ADA : TECH;
+    expect((await quote({ diagnosis: "x", repair_cost: 100 }, auth)).status).toBe(403);
   });
 });
 
@@ -446,8 +447,18 @@ describe("email policy", () => {
     "sends no email for %s",
     async (to) => {
       const from = { courier_assigned: "pickup_scheduled", device_collected: "courier_assigned", diagnosis: "device_collected", repair: "waiting_approval", quality_check: "repair" }[to];
-      given(shipment({ status: from, approval_status: from === "waiting_approval" ? "approved" : null }));
-      await setStatus(to);
+      given(
+        shipment({
+          status: from,
+          approval_status: from === "waiting_approval" ? "approved" : null,
+          repair_outcome: from === "repair" ? "repaired" : null,
+        }),
+        [[/FROM users WHERE id = \? AND role = 'technician'/, [[{ id: 5, first_name: "Tee", last_name: "Tech", email: "t@x" }]]]],
+      );
+      await request(app)
+        .patch("/api/shipments/3/status")
+        .set("Authorization", ADMIN)
+        .send({ status: to, technician_id: 5 });
       expect(sendMail).not.toHaveBeenCalled();
     },
   );

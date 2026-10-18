@@ -11,6 +11,7 @@ const {
   startRemoteSession,
   getSupportTypes,
   getBookingSlots,
+  createMeetingLink,
 } = require("../controllers/Booking.Controller");
 const { paymentFlowLimiter } = require("../middleware/rateLimit");
 const { verifyToken, authorize } = require("../middleware/auth");
@@ -41,6 +42,13 @@ router.post(
   verifyToken,
   authorize("admin", "technician"),
   startRemoteSession,
+);
+
+router.post(
+  "/:id/meeting",
+  verifyToken,
+  authorize("admin", "technician"),
+  createMeetingLink,
 );
 
 module.exports = router;

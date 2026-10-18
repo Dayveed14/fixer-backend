@@ -117,14 +117,22 @@ describe("PATCH /api/shipments/:id/status", () => {
     expect(res.status).toBe(403);
   });
 
-  it("200s for a technician moving it to the next step", async () => {
+  it("403s for a technician (admins move shipments; technicians report repairs)", async () => {
+    const res = await request(app)
+      .patch("/api/shipments/1/status")
+      .set("Authorization", authHeader({ role: "technician" }))
+      .send({ status: "courier_assigned" });
+    expect(res.status).toBe(403);
+  });
+
+  it("200s for an admin moving it to the next step", async () => {
     db.query
       .mockResolvedValueOnce([[{ id: 1, reference: "FXR-1001", status: "pickup_scheduled", user_id: 3 }]])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     const res = await request(app)
       .patch("/api/shipments/1/status")
-      .set("Authorization", authHeader({ role: "technician" }))
+      .set("Authorization", authHeader({ role: "admin" }))
       .send({ status: "courier_assigned" });
 
     expect(res.status).toBe(200);

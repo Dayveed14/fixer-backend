@@ -81,25 +81,65 @@ describe("GET /api/articles/:id (public)", () => {
   });
 });
 
-describe("PUT /api/articles/:id (admin-only)", () => {
+describe("PUT /api/articles/:slug (admin-only)", () => {
   it("403s for a technician", async () => {
     const res = await request(app)
-      .put("/api/articles/1")
+      .put("/api/articles/fix-a-slow-laptop")
       .set("Authorization", authHeader({ role: "technician" }))
       .send({ title: "Updated" });
     expect(res.status).toBe(403);
   });
 
-  it("200s for an admin (no new file, no cloudinary cleanup)", async () => {
-    db.query.mockResolvedValueOnce([{}]);
+  it("404s an unknown slug", async () => {
+    db.query.mockResolvedValueOnce([[]]); // slug lookup
+    const res = await request(app)
+      .put("/api/articles/nope")
+      .set("Authorization", authHeader({ role: "admin" }))
+      .send({ title: "Updated" });
+    expect(res.status).toBe(404);
+  });
+
+  it("200s for an admin, updating by slug without changing the slug (no new file, no cloudinary cleanup)", async () => {
+    db.query
+      .mockResolvedValueOnce([[{ id: 7, hero_image: "https://img/old.jpg" }]]) // slug lookup
+      .mockResolvedValueOnce([{}]); // UPDATE
 
     const res = await request(app)
-      .put("/api/articles/1")
+      .put("/api/articles/fix-a-slow-laptop")
       .set("Authorization", authHeader({ role: "admin" }))
-      .send({ title: "Updated", status: "published" });
+      .send({ title: "Updated", slug: "hijacked-slug", status: "published" });
 
     expect(res.status).toBe(200);
-    expect(db.query).toHaveBeenCalledTimes(1); // no old-image lookup without a new file
+    expect(db.query).toHaveBeenCalledTimes(2);
+    expect(db.query.mock.calls[0][1]).toEqual(["fix-a-slow-laptop"]);
+    const [updateSql, updateParams] = db.query.mock.calls[1];
+    expect(updateSql).not.toMatch(/slug\s*=/); // the URL slug is permanent
+    expect(updateParams).not.toContain("hijacked-slug");
+    expect(updateParams[updateParams.length - 1]).toBe(7); // WHERE id = the looked-up id
+  });
+});
+
+describe("GET article: public vs admin", () => {
+  it("public endpoint only returns published articles", async () => {
+    const res = await request(app).get("/api/articles/draft-post");
+    expect(res.status).toBe(404); // mocked DB returns no published row
+    expect(db.query.mock.calls[0][0]).toMatch(/articles\.status = 'published'/);
+  });
+
+  it("admin endpoint returns any status", async () => {
+    db.query.mockResolvedValueOnce([[{ id: 3, slug: "draft-post", status: "draft" }]]);
+    const res = await request(app)
+      .get("/api/articles/manage/draft-post")
+      .set("Authorization", authHeader({ role: "admin" }));
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("draft");
+    expect(db.query.mock.calls[0][0]).not.toMatch(/'published'/);
+  });
+
+  it.each([undefined, "user", "technician"])("admin endpoint is closed to %s", async (role) => {
+    const req = request(app).get("/api/articles/manage/draft-post");
+    if (role) req.set("Authorization", authHeader({ role }));
+    expect((await req).status).toBe(role ? 403 : 401);
   });
 });
 

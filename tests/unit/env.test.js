@@ -21,15 +21,24 @@ describe("environment validation", () => {
     expect(missing).toEqual(["JWT_SECRET", "DB_HOST"]);
   });
 
-  it("flags a short JWT secret and a test Paystack key in production", () => {
-    const result = validateEnv({
-      ...complete,
-      NODE_ENV: "production",
-      JWT_SECRET: "short",
-      PAYSTACK_SECRET_KEY: "sk_test_123",
-    });
+  it("flags a short JWT secret in production", () => {
+    const result = validateEnv({ ...complete, NODE_ENV: "production", JWT_SECRET: "short" });
     expect(result.ok).toBe(false);
-    expect(result.problems).toHaveLength(2);
+    expect(result.problems).toEqual([expect.stringMatching(/JWT_SECRET/)]);
+  });
+
+  it("allows a Paystack test key in production but warns (test mode on the live site)", () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const result = validateEnv({ ...complete, NODE_ENV: "production", PAYSTACK_SECRET_KEY: "sk_test_123" });
+    expect(result.ok).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/PAYSTACK TEST MODE/));
+    warn.mockRestore();
+  });
+
+  it("rejects a Paystack key in the wrong format", () => {
+    const result = validateEnv({ ...complete, PAYSTACK_SECRET_KEY: "pk_live_oops" });
+    expect(result.ok).toBe(false);
+    expect(result.problems).toEqual([expect.stringMatching(/valid-format/)]);
   });
 
   it("throws at startup in production when misconfigured", () => {

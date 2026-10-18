@@ -79,12 +79,7 @@ exports.getArticles = async (req, res) => {
           }
 };
 
-exports.getArticle = async (req, res) => {
-  try {
-    const { slug } = req.params;
-
-    const [result] = await db.query(
-      `SELECT
+const ARTICLE_COLUMNS = `
         articles.id,
         articles.title,
         articles.slug,
@@ -94,13 +89,28 @@ exports.getArticle = async (req, res) => {
         articles.image_alt,
         articles.category,
         articles.tags,
+        articles.status,
+        articles.featured,
         articles.views,
         articles.created_at,
-        CONCAT(users.first_name, ' ', users.last_name) AS author
+        CONCAT(users.first_name, ' ', users.last_name) AS author`;
+
+/* ===========================
+   GET ONE ARTICLE (public) — GET /api/articles/:slug
+   Published articles only. Drafts and articles without a status are
+   invisible to the public, even if someone guesses the slug.
+=========================== */
+exports.getArticle = async (req, res) => {
+  try {
+    const { slug } = req.params;
+
+    const [result] = await db.query(
+      `SELECT ${ARTICLE_COLUMNS}
       FROM articles
       INNER JOIN users
         ON users.id = articles.author_id
-      WHERE articles.slug = ? `,
+      WHERE articles.slug = ?
+        AND articles.status = 'published'`,
       [slug],
     );
 
@@ -117,6 +127,35 @@ exports.getArticle = async (req, res) => {
     res.status(500).json({
       message: "Server Error",
     });
+  }
+};
+
+/* ===========================
+   GET ONE ARTICLE (admin) — GET /api/articles/manage/:slug
+   Any status: published, draft, or none. Used by the admin view and
+   edit pages.
+=========================== */
+exports.getArticleForAdmin = async (req, res) => {
+  try {
+    const { slug } = req.params;
+
+    const [result] = await db.query(
+      `SELECT ${ARTICLE_COLUMNS}
+      FROM articles
+      LEFT JOIN users
+        ON users.id = articles.author_id
+      WHERE articles.slug = ?`,
+      [slug],
+    );
+
+    if (result.length === 0) {
+      return res.status(404).json({ message: "Article not found" });
+    }
+
+    res.json(result[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server Error" });
   }
 };
 
