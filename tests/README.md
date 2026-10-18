@@ -48,15 +48,30 @@ service is ever touched. Nothing here needs `.env` values beyond what
 
 ## What's covered
 
-Every endpoint gets: the 401 case (no token, where auth is required),
-the 403 case (wrong role, or wrong owner for anything ownership-scoped
-— a customer hitting another customer's booking/device/ticket/etc.),
-and at least one happy path. Payment-gated endpoints (bookings,
-shipments) also cover the Paystack verification failure path. File
-upload endpoints (articles, DIY videos) are tested without an actual
-file attached — that's enough to cover the auth/validation/DB logic;
-the Cloudinary upload step itself is third-party plumbing and isn't
-exercised here.
+Tests are grouped by the priorities they protect:
+
+| Folder | Priority | What it proves |
+|---|---|---|
+| `tests/security/` | 1 — auth & authorization | Every protected endpoint 401s without a session, with a forged/expired/`alg=none` token, and 403s for the wrong role (one table in `authMatrix.test.js`); record ownership / ID manipulation (`ownership.test.js`); rate limits actually trip (`rateLimit.test.js`). |
+| `tests/payments/` | 2 — payments | Server-side pricing at initialisation; Paystack verification; wrong amount/currency; failed/abandoned/reversed/pending states; Paystack outage leaves the payment pending; duplicate references return the existing record; DB failures roll back; another user's payment is refused; webhook signature, replays and amount mismatches; who can read payment records. |
+| `tests/workflows/` + `tests/routes/` | 3 — core workflows | Register → login → pay → book → assign → resolve → rate, plus per-endpoint tests for bookings, tickets, shipments, ratings, devices, etc. |
+| `tests/fixbot/` | 4 — FixBot | Knowledge-base match; no match → AI; AI failure, timeout and malformed output degrade to a `no_match` answer; per-caller and global AI budgets; identity only from verified sessions; input size/shape limits. |
+| `tests/deployment/` + `tests/unit/env.test.js` | 5 — deployment | Health/readiness checks, JSON 404/400/413 handling, CORS, app import has no side effects, environment validation, Paystack client timeouts. |
+| `tests/unit/` | — | Pure logic: Abuja zone pricing, 8 AM–10 PM slot rules in Abuja time, AI output normalisation, Paystack client. |
+
+The frontend production build is checked in the frontend repo
+(`npm run build`), alongside its own Vitest suite.
+
+### Helpers
+
+- `tests/helpers/sqlRouter.js` — `routeQueries(db.query, [[/regex/, result], ...])`
+  answers mocked queries by SQL text instead of call order. Use it for
+  flows that issue many queries (payments).
+- `tests/helpers/dates.js` — `tomorrow()`, `yesterday()`, `daysFromNow(n)`
+  in Abuja time, so date-based tests never go stale.
+- Rate limits are set very high for every test file by
+  `tests/helpers/env.js`; `tests/security/rateLimit.test.js` sets its
+  own low values before loading the app.
 
 ## Adding a new test
 

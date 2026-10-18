@@ -18,6 +18,33 @@ exports.registerUser = async (req, res) => {
       });
     }
 
+    if (
+      [first_name, last_name, email, password].some((v) => typeof v !== "string") ||
+      (phone !== undefined && phone !== null && typeof phone !== "string")
+    ) {
+      return res.status(400).json({ message: "Invalid registration details." });
+    }
+
+    if (
+      first_name.length > 80 ||
+      last_name.length > 80 ||
+      email.length > 160 ||
+      (phone && phone.length > 30)
+    ) {
+      return res.status(400).json({ message: "One or more fields are too long." });
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return res.status(400).json({ message: "Please enter a valid email address." });
+    }
+
+    // bcrypt only uses the first 72 bytes, so cap length as well.
+    if (password.length < 8 || password.length > 72) {
+      return res.status(400).json({
+        message: "Password must be between 8 and 72 characters.",
+      });
+    }
+
     // Clean input
     first_name = first_name.trim();
     last_name = last_name.trim();
@@ -37,7 +64,8 @@ exports.registerUser = async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Insert user
+    // Insert user (role is never taken from the request — new accounts
+    // are always customers; staff accounts come from POST /users/create)
     const sql = `
       INSERT INTO users
       (

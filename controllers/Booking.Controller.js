@@ -2,26 +2,59 @@ const db = require("../config/db");
 const { generateInviteLink } = require("../services/meshCentralService");
 const createNotification = require("../services/notificationService");
 const sendMail = require("../services/mailService");
-const { verifyPayment } = require("../services/paystackService");
+const {
+  confirmPayment,
+  fulfillPayment,
+} = require("../services/paymentService");
+const { sendPaymentError } = require("./Payment.Controller");
+const pricing = require("../services/pricingService");
+const {
+  availableSlots,
+  allSlots,
+  normalizeTime,
+  parseDate,
+  LEAD_MINUTES,
+} = require("../utils/schedule");
+const escapeHtml = require("../utils/escapeHtml");
 
-// Matches the ₦ pricing shown in BookCall.jsx's SUPPORT_TYPES.
-// Frontend uses "remote" as the id; DB enum uses "remote_desktop".
-// amount is stored in Naira (what the DB/UI shows); amountKobo is what
-// Paystack actually deals in and is what we verify the payment against.
-const SUPPORT_TYPE_MAP = {
-  voice: { db: "voice", amount: 5000, amountKobo: 500000 },
-  video: { db: "video", amount: 7000, amountKobo: 700000 },
-  remote: { db: "remote_desktop", amount: 10000, amountKobo: 1000000 },
+const MAX_ISSUE_LENGTH = 2000;
+const MAX_DEVICE_LENGTH = 60;
+
+/* ===========================
+   SUPPORT TYPES + SLOTS (public)
+   GET /api/bookings/support-types
+   GET /api/bookings/slots?date=YYYY-MM-DD
+=========================== */
+exports.getSupportTypes = async (req, res) => {
+  try {
+    const types = await pricing.getSupportTypes();
+    return res.json(types.map(({ id, title, amount }) => ({ id, title, amount })));
+  } catch (err) {
+    console.error("Support types error:", err);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+exports.getBookingSlots = (req, res) => {
+  const { date } = req.query;
+  if (!parseDate(date)) {
+    return res.status(400).json({ message: "date must be YYYY-MM-DD." });
+  }
+  return res.json({
+    date,
+    lead_minutes: LEAD_MINUTES.booking,
+    all: allSlots("booking"),
+    available: availableSlots(date, "booking"),
+  });
 };
 
 /* ===========================
    CREATE BOOKING
-   Called when a customer completes the BookCall.jsx flow.
-   The frontend must have already collected payment via the Paystack popup
-   and pass the resulting reference here — we independently re-verify it
-   with Paystack (status, currency, and exact amount) before writing
-   anything to the DB. A booking is never created on the strength of the
-   frontend's word alone.
+   Called when a customer completes the BookCall.jsx flow, after paying
+   with a reference from POST /api/payments/initialize. The payment is
+   re-verified with Paystack and checked against the server-side
+   payment record (owner, amount, currency, support type and slot)
+   before anything is written — see services/paymentService.js.
 =========================== */
 
 exports.createBooking = async (req, res) => {
@@ -30,12 +63,11 @@ exports.createBooking = async (req, res) => {
       support_type, // "voice" | "video" | "remote" (frontend ids)
       booking_date,
       booking_time,
-      duration,
       issue_summary,
       device,
       diagnosis_id,
       payment_reference,
-    } = req.body;
+    } = req.body || {};
 
     // Always the caller's own id from the verified token — a booking can
     // only ever be created for the account that's actually logged in.
@@ -53,7 +85,7 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    const typeInfo = SUPPORT_TYPE_MAP[support_type];
+    const typeInfo = await pricing.getSupportType(support_type);
 
     if (!typeInfo) {
       return res.status(400).json({
@@ -61,13 +93,20 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    try {
-      await verifyPayment(payment_reference, typeInfo.amountKobo);
-    } catch (paymentError) {
-      console.error("Booking payment verification failed:", paymentError.message);
+    const bookingTime = normalizeTime(booking_time);
+    if (!parseDate(booking_date) || !bookingTime) {
+      return res.status(400).json({ message: "Invalid booking date or time." });
+    }
 
-      return res.status(402).json({
-        message: `Payment could not be verified: ${paymentError.message}`,
+    if (issue_summary && String(issue_summary).length > MAX_ISSUE_LENGTH) {
+      return res.status(400).json({
+        message: `issue_summary must be at most ${MAX_ISSUE_LENGTH} characters.`,
+      });
+    }
+
+    if (device && String(device).length > MAX_DEVICE_LENGTH) {
+      return res.status(400).json({
+        message: `device must be at most ${MAX_DEVICE_LENGTH} characters.`,
       });
     }
 
@@ -82,56 +121,77 @@ exports.createBooking = async (req, res) => {
       });
     }
 
+    const payment = await confirmPayment({
+      reference: payment_reference,
+      userId: user_id,
+      purpose: "booking",
+      details: {
+        support_type: typeInfo.id,
+        booking_date,
+        booking_time: bookingTime,
+      },
+    });
+
+    const amountNaira = Number(payment.amount_kobo) / 100;
+
+    const { entityId: bookingId, alreadyFulfilled } = await fulfillPayment({
+      reference: payment.reference,
+      entityType: "booking",
+      actorUserId: user_id,
+      create: async (connection) => {
+        const [result] = await connection.query(
+          `
+          INSERT INTO bookings
+          (
+            booking_reference, user_id, support_type, booking_date,
+            booking_time, duration, issue_summary, device, amount,
+            payment_status, payment_reference, diagnosis_id, status
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?, 'pending')
+          `,
+          [
+            "PENDING",
+            user_id,
+            typeInfo.db,
+            booking_date,
+            bookingTime,
+            30,
+            issue_summary || null,
+            device || null,
+            amountNaira,
+            payment.reference,
+            diagnosis_id || null,
+          ],
+        );
+
+        const id = result.insertId;
+        await connection.query(
+          "UPDATE bookings SET booking_reference = ? WHERE id = ?",
+          [`#BK${1000 + id}`, id],
+        );
+        return id;
+      },
+    });
+
+    const booking_reference = `#BK${1000 + Number(bookingId)}`;
+
+    if (alreadyFulfilled) {
+      return res.status(200).json({
+        message: "Booking already confirmed for this payment",
+        id: bookingId,
+        booking_reference,
+        amount: amountNaira,
+      });
+    }
+
     const customerName = `${customer.first_name} ${customer.last_name}`;
     const customerEmail = customer.email;
-
-    const insertSql = `
-      INSERT INTO bookings
-      (
-        booking_reference,
-        user_id,
-        support_type,
-        booking_date,
-        booking_time,
-        duration,
-        issue_summary,
-        device,
-        amount,
-        payment_status,
-        payment_reference,
-        diagnosis_id,
-        status
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?, 'pending')
-    `;
-
-    const [result] = await db.query(insertSql, [
-      "PENDING",
-      user_id,
-      typeInfo.db,
-      booking_date,
-      booking_time,
-      duration || 30,
-      issue_summary || null,
-      device || null,
-      typeInfo.amount,
-      payment_reference,
-      diagnosis_id || null,
-    ]);
-
-    const bookingId = result.insertId;
-    const booking_reference = `#BK${1000 + bookingId}`;
-
-    await db.query("UPDATE bookings SET booking_reference = ? WHERE id = ?", [
-      booking_reference,
-      bookingId,
-    ]);
+    const safeName = escapeHtml(customerName);
+    const safeIssue = escapeHtml(issue_summary || "N/A");
+    const timeLabel = bookingTime.slice(0, 5);
 
     // Notification/email failures shouldn't turn a successful booking into
     // a 500 for the customer — the row is already committed at this point.
-    // NOTE: the customer notification lives in here now too — it was
-    // previously placed after this block, unprotected, which meant a
-    // failure here would 500 a booking that had already succeeded.
     try {
       await createNotification({
         role: "admin",
@@ -158,17 +218,11 @@ exports.createBooking = async (req, res) => {
           subject: "New Booking",
           html: `
                 <h2>New Booking</h2>
-
-                <p><strong>Customer:</strong> ${customerName}</p>
-
+                <p><strong>Customer:</strong> ${safeName}</p>
                 <p><strong>Support:</strong> ${typeInfo.db}</p>
-
                 <p><strong>Date:</strong> ${booking_date}</p>
-
-                <p><strong>Time:</strong> ${booking_time}</p>
-
-                <p><strong>Issue:</strong> ${issue_summary || "N/A"}</p>
-
+                <p><strong>Time:</strong> ${timeLabel}</p>
+                <p><strong>Issue:</strong> ${safeIssue}</p>
                 <p><strong>Booking Ref:</strong> ${booking_reference}</p>`,
         }, "admin");
       }
@@ -179,18 +233,13 @@ exports.createBooking = async (req, res) => {
           subject: "Booking Confirmation",
           html: `
                   <h2>Booking Confirmed</h2>
-
-                  <p>Hi ${customer.first_name},</p>
-
+                  <p>Hi ${escapeHtml(customer.first_name)},</p>
                   <p>Your booking has been received successfully.</p>
-
                   <p><strong>Booking Ref:</strong> ${booking_reference}</p>
                   <p><strong>Support:</strong> ${typeInfo.db}</p>
                   <p><strong>Date:</strong> ${booking_date}</p>
-                  <p><strong>Time:</strong> ${booking_time}</p>
-
+                  <p><strong>Time:</strong> ${timeLabel}</p>
                   <p>We'll assign a technician shortly.</p>
-
                   <p>Thank you,<br/>Fixer Support</p>
                   `,
         }, "support");
@@ -206,9 +255,13 @@ exports.createBooking = async (req, res) => {
       message: "Booking confirmed",
       id: bookingId,
       booking_reference,
-      amount: typeInfo.amount,
+      amount: amountNaira,
     });
   } catch (error) {
+    if (error.name === "PaymentError") {
+      return sendPaymentError(res, error);
+    }
+
     console.error(error);
 
     if (error.code === "ER_DUP_ENTRY") {

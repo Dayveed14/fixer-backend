@@ -4,6 +4,9 @@ const cookieParser = require("cookie-parser");
 const path = require("path");
 require("dotenv").config();
 
+// Fail fast (in production) on missing configuration.
+require("./config/env").assertEnv();
+
 const { COOKIE_NAME } = require("./config/cookie");
 
 const userApi = require("./routes/User.route");
@@ -22,6 +25,9 @@ const bookingApi = require("./routes/Booking.route");
 const ratingApi = require("./routes/Rating.route");
 const deviceApi = require("./routes/Device.route");
 const notificationApi = require("./routes/Notification.route");
+const paymentApi = require("./routes/Payment.route");
+const healthApi = require("./routes/Health.route");
+const pricingApi = require("./routes/Pricing.route");
 
 const db = require("./config/db");
 
@@ -42,6 +48,7 @@ const allowedOrigins = [
   "https://fixer-vite.vercel.app",
   "https://fixerng.app",
   "https://www.fixerng.app",
+  "https://localhost",
 ];
 
 app.use(
@@ -58,9 +65,19 @@ app.use(
   }),
 );
 
-app.use(express.json());
+// Body size limits: nothing in this API legitimately sends large JSON
+// (file uploads go through multer, not here). rawBody is kept so the
+// Paystack webhook can verify its HMAC signature over the exact bytes.
+app.use(
+  express.json({
+    limit: process.env.JSON_BODY_LIMIT || "100kb",
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
 
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 
 app.use(cookieParser());
 
@@ -96,15 +113,14 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 /* Test Database Connection */
 
-db.getConnection((err, connection) => {
-  if (err) {
-    console.log("Database Connection Failed");
-    console.log(err);
-  } else {
-    console.log("MySQL Connected Successfully");
-    connection.release();
-  }
-});
+if (require.main === module) {
+  db.query("SELECT 1")
+    .then(() => console.log("MySQL Connected Successfully"))
+    .catch((err) => {
+      console.error("Database Connection Failed");
+      console.error(err);
+    });
+}
 
 /* Routes */
 
@@ -121,6 +137,9 @@ app.use("/api/ratings", ratingApi);
 app.use("/api/devices", deviceApi);
 app.use("/api/notifications", notificationApi);
 app.use("/api/test", testApi);
+app.use("/api/payments", paymentApi);
+app.use("/api/health", healthApi);
+app.use("/api/pricing", pricingApi);
 
 // app.use("/api/shipments", shipmentApi);
 
@@ -138,12 +157,41 @@ app.get("/", (req, res) => {
   });
 });
 
+/* Not found + error handling */
+
+app.use("/api", (req, res) => {
+  res.status(404).json({ message: "Not found." });
+});
+
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (err.type === "entity.too.large") {
+    return res.status(413).json({ message: "Request body is too large." });
+  }
+
+  if (err.type === "entity.parse.failed") {
+    return res.status(400).json({ message: "Malformed JSON in request body." });
+  }
+
+  if (err.message === "Not allowed by CORS") {
+    return res.status(403).json({ message: "Origin not allowed." });
+  }
+
+  console.error(err);
+  return res.status(500).json({ message: "Internal Server Error" });
+});
+
 /* Server */
 
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server Running on Port ${PORT}`);
   });
+
+  // Confirms deliveries the customer didn't confirm in time. Runs at
+  // startup (so it catches up after Render wakes the service) and every
+  // 5 minutes while running.
+  require("./services/shipmentLifecycle").startAutoConfirmJob();
 }
 
 module.exports = app;

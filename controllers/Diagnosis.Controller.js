@@ -1,22 +1,137 @@
+const crypto = require("crypto");
 const db = require("../config/db"); // mysql2 connection
 const analyzeIssue = require("../services/gemini");
-exports.runDiagnosis = async (req, res) => {
+const {
+  tryConsumeAiBudget,
+  withTimeout,
+  normalizeAiDiagnosis,
+} = require("../services/aiGuard");
+
+const LIMITS = {
+  deviceType: 50,
+  brand: 100,
+  primaryFault: 200,
+  description: 2000,
+  symptomCount: 20,
+  symptomLength: 100,
+};
+
+// Validates FixBot input. Returns { ok, message, value }.
+function validateDiagnosisInput(body) {
+  const {
+    deviceType,
+    brand = "",
+    primaryFault,
+    selectedSymptoms = [],
+    description = "",
+  } = body || {};
+
+  const isText = (v) => typeof v === "string";
+
+  if (!isText(deviceType) || !deviceType.trim() || !isText(primaryFault) || !primaryFault.trim()) {
+    return { ok: false, message: "Device type and primary fault are required." };
+  }
+
+  if (!isText(brand) || !isText(description)) {
+    return { ok: false, message: "brand and description must be text." };
+  }
+
+  if (
+    !Array.isArray(selectedSymptoms) ||
+    selectedSymptoms.some((s) => !isText(s))
+  ) {
+    return { ok: false, message: "selectedSymptoms must be a list of text values." };
+  }
+
+  const tooLong = [
+    ["deviceType", deviceType],
+    ["brand", brand],
+    ["primaryFault", primaryFault],
+    ["description", description],
+  ].find(([field, value]) => value.length > LIMITS[field]);
+
+  if (tooLong) {
+    return {
+      ok: false,
+      message: `${tooLong[0]} must be at most ${LIMITS[tooLong[0]]} characters.`,
+    };
+  }
+
+  if (selectedSymptoms.length > LIMITS.symptomCount) {
+    return { ok: false, message: `Select at most ${LIMITS.symptomCount} symptoms.` };
+  }
+
+  if (selectedSymptoms.some((s) => s.length > LIMITS.symptomLength)) {
+    return {
+      ok: false,
+      message: `Each symptom must be at most ${LIMITS.symptomLength} characters.`,
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      deviceType: deviceType.trim(),
+      brand: brand.trim(),
+      primaryFault: primaryFault.trim(),
+      selectedSymptoms: selectedSymptoms.map((s) => s.trim()).filter(Boolean),
+      description: description.trim(),
+    },
+  };
+}
+
+// Records how a diagnosis was answered, for investigating failures.
+// Deliberately stores no free text from the customer beyond what the
+// request row already holds, and never stores IPs or provider payloads.
+// Best-effort: a missing column (migration not yet run) must not break
+// FixBot for the customer.
+async function recordOutcome(requestId, outcome) {
   try {
+    await db.query(
+      `UPDATE diagnosis_requests
+          SET result_source = ?, failure_reason = ?, latency_ms = ?
+        WHERE id = ?`,
+      [outcome.source, outcome.failureReason || null, outcome.latencyMs, requestId],
+    );
+  } catch (err) {
+    console.warn("diagnosis outcome not recorded:", err.code || err.message);
+  }
+}
+
+function logDiagnosis(event) {
+  // One structured line per request — no description/brand text.
+  console.info(JSON.stringify({ type: "fixbot", ...event }));
+}
+
+exports.validateDiagnosisInput = validateDiagnosisInput;
+
+exports.runDiagnosis = async (req, res) => {
+  const startedAt = Date.now();
+  const traceId = crypto.randomBytes(6).toString("hex");
+
+  try {
+    const validation = validateDiagnosisInput(req.body);
+
+    if (!validation.ok) {
+      return res.status(400).json({
+        success: false,
+        message: validation.message,
+      });
+    }
+
     const {
-      user_id,
       deviceType,
       brand,
       primaryFault,
       selectedSymptoms,
       description,
-    } = req.body;
+    } = validation.value;
 
-    if (!deviceType || !primaryFault) {
-      return res.status(400).json({
-        success: false,
-        message: "Device type and primary fault are required.",
-      });
-    }
+    // Identity comes ONLY from a verified token (optionalAuth). Any
+    // user_id in the request body is ignored, so a guest can't file
+    // diagnoses under someone else's account.
+    const user_id = req.user?.id || null;
+    const callerKey = user_id ? `user:${user_id}` : `ip:${req.ip}`;
 
     //--------------------------------------------------
     // Save request
@@ -36,12 +151,12 @@ exports.runDiagnosis = async (req, res) => {
             VALUES (?, ?, ?, ?, ?, ?)`,
 
       [
-        user_id || null,
+        user_id,
         deviceType,
-        brand,
+        brand || null,
         primaryFault,
         JSON.stringify(selectedSymptoms),
-        description,
+        description || null,
       ],
     );
 
@@ -273,48 +388,106 @@ exports.runDiagnosis = async (req, res) => {
     // Respond based on whether the top match cleared the threshold
     //--------------------------------------------------
 
+    const requestId = request.insertId;
+
     if (bestScore >= CONFIDENCE_THRESHOLD) {
+      const latencyMs = Date.now() - startedAt;
+      await recordOutcome(requestId, { source: "knowledge_base", latencyMs });
+      logDiagnosis({ traceId, requestId, source: "knowledge_base", latencyMs, guest: !user_id });
+
       return res.json({
         success: true,
 
         source: "knowledge_base",
 
-        requestId: request.insertId,
+        requestId,
 
         results: matches,
       });
     }
 
     //--------------------------------------------------
-    // No match yet
+    // No confident match — AI fallback, within budget
     //--------------------------------------------------
 
-    // Otherwise use Gemini
-    const aiResult = await analyzeIssue({
-      deviceType,
-      brand,
-      primaryFault,
-      selectedSymptoms,
-      description,
-    });
+    // Partial matches we can still show if the AI isn't available.
+    const suggestions = matches.filter((m) => m.score > 0).slice(0, 3);
+
+    const noMatch = async (reason, message) => {
+      const latencyMs = Date.now() - startedAt;
+      await recordOutcome(requestId, {
+        source: "no_match",
+        failureReason: reason,
+        latencyMs,
+      });
+      logDiagnosis({ traceId, requestId, source: "no_match", reason, latencyMs, guest: !user_id });
+
+      return res.json({
+        success: true,
+        source: "no_match",
+        requestId,
+        reason,
+        message,
+        suggestions,
+      });
+    };
+
+    const budget = tryConsumeAiBudget(callerKey);
+
+    if (!budget.allowed) {
+      return noMatch(
+        budget.reason === "caller_limit" ? "ai_daily_limit" : "ai_capacity",
+        "We couldn't find a confident match in our repair knowledge base. A technician can take a look — book a call or send your device in.",
+      );
+    }
+
+    let aiResult;
+    try {
+      const raw = await withTimeout(
+        analyzeIssue({
+          deviceType,
+          brand,
+          primaryFault,
+          selectedSymptoms,
+          description,
+        }),
+      );
+      aiResult = normalizeAiDiagnosis(raw);
+    } catch (aiError) {
+      const reason =
+        aiError.name === "AiTimeoutError"
+          ? "ai_timeout"
+          : aiError.name === "AiInvalidResponseError" || aiError instanceof SyntaxError
+            ? "ai_invalid_response"
+            : "ai_unavailable";
+
+      console.error(`FixBot AI fallback failed [${traceId}]:`, aiError.message);
+
+      return noMatch(
+        reason,
+        "Our AI assistant is unavailable right now, and we couldn't find a confident match in our knowledge base. A technician can help — book a call or send your device in.",
+      );
+    }
+
+    const latencyMs = Date.now() - startedAt;
+    await recordOutcome(requestId, { source: "ai", latencyMs });
+    logDiagnosis({ traceId, requestId, source: "ai", latencyMs, guest: !user_id });
 
     // Tag this explicitly rather than leaving the frontend to infer
-    // "not knowledge_base" == AI from the shape of the response —
-    // analyzeIssue() returns Gemini's raw parsed JSON, which has no
-    // field of its own identifying where it came from.
+    // "not knowledge_base" == AI from the shape of the response.
     return res.json({
       success: true,
       source: "ai",
-      requestId: request.insertId,
+      requestId,
       ...aiResult,
     });
   } catch (err) {
-    console.log(err);
+    // Never leak internal error text (SQL, stack details) to the client.
+    console.error(`FixBot error [${traceId}]:`, err);
 
     res.status(500).json({
       success: false,
-
-      message: err.message,
+      message: "Something went wrong while running the diagnosis. Please try again.",
     });
   }
 };

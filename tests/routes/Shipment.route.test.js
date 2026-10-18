@@ -35,31 +35,8 @@ describe("POST /api/shipments", () => {
     expect(res.status).toBe(400);
   });
 
-  it("402s on failed payment verification", async () => {
-    verifyPayment.mockRejectedValueOnce(new Error("Payment was not successful."));
-
-    const res = await request(app)
-      .post("/api/shipments")
-      .set("Authorization", authHeader({ role: "user" }))
-      .send(validShipment);
-
-    expect(res.status).toBe(402);
-    expect(verifyPayment).toHaveBeenCalledWith("ref_1", 250000);
-  });
-
-  it("creates a shipment on successful payment", async () => {
-    db.query
-      .mockResolvedValueOnce([{ insertId: 3 }])
-      .mockResolvedValueOnce([{}]);
-
-    const res = await request(app)
-      .post("/api/shipments")
-      .set("Authorization", authHeader({ role: "user" }))
-      .send(validShipment);
-
-    expect(res.status).toBe(201);
-    expect(res.body.reference).toBe("FXR-1003");
-  });
+  // Payment verification + creation is covered in depth by
+  // tests/payments/shipmentPayment.test.js.
 });
 
 describe("GET /api/shipments (admin-only)", () => {
@@ -140,13 +117,15 @@ describe("PATCH /api/shipments/:id/status", () => {
     expect(res.status).toBe(403);
   });
 
-  it("200s for a technician", async () => {
-    db.query.mockResolvedValueOnce([{}]);
+  it("200s for a technician moving it to the next step", async () => {
+    db.query
+      .mockResolvedValueOnce([[{ id: 1, reference: "FXR-1001", status: "pickup_scheduled", user_id: 3 }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     const res = await request(app)
       .patch("/api/shipments/1/status")
       .set("Authorization", authHeader({ role: "technician" }))
-      .send({ status: "in_transit" });
+      .send({ status: "courier_assigned" });
 
     expect(res.status).toBe(200);
   });

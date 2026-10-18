@@ -12,9 +12,9 @@ const {
   getUsers,
 } = require("../controllers/User.Controller");
 const { verifyToken, authorize } = require("../middleware/auth");
-const { loginLimiter } = require("../middleware/rateLimit");
+const { loginLimiter, registerLimiter } = require("../middleware/rateLimit");
 
-router.post("/register", registerUser);
+router.post("/register", registerLimiter, registerUser);
 
 router.post("/login", loginLimiter, loginUser);
 

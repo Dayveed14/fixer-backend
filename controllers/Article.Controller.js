@@ -67,16 +67,16 @@ exports.getArticles = async (req, res) => {
   try {
     const [articles] = await db.query(
       `SELECT *
-FROM articles
-ORDER BY created_at DESC`,
-    );
+        FROM articles
+        ORDER BY created_at DESC`,
+            );
 
-    res.json(articles);
-  } catch (err) {
-    res.status(500).json({
-      message: "Server Error",
-    });
-  }
+            res.json(articles);
+          } catch (err) {
+            res.status(500).json({
+              message: "Server Error",
+            });
+          }
 };
 
 exports.getArticle = async (req, res) => {
@@ -123,11 +123,10 @@ exports.getArticle = async (req, res) => {
 
 exports.updateArticle = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { slug } = req.params;
 
     const {
       title,
-      slug,
       excerpt,
       content,
       category,
@@ -137,24 +136,36 @@ exports.updateArticle = async (req, res) => {
       image_alt,
     } = req.body;
 
-    let sql = `
-UPDATE articles
-SET
+    // Find the existing article using its permanent slug.
+    const [existing] = await db.query(
+      "SELECT id, hero_image FROM articles WHERE slug = ?",
+      [slug]
+    );
 
-title=?,
-slug=?,
-excerpt=?,
-content=?,
-category=?,
-tags=?,
-featured=?,
-status=?,
-image_alt=?
-`;
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Article not found",
+      });
+    }
+
+    const article = existing[0];
+
+    let sql = `
+      UPDATE articles
+      SET
+        title = ?,
+        excerpt = ?,
+        content = ?,
+        category = ?,
+        tags = ?,
+        featured = ?,
+        status = ?,
+        image_alt = ?
+    `;
 
     const values = [
       title,
-      slug,
       excerpt,
       content,
       category,
@@ -166,40 +177,45 @@ image_alt=?
 
     let oldImageUrl = null;
 
+    // Update the image only if a new one was uploaded.
     if (req.file) {
-      // Look up the image currently on this article so we can delete it
-      // from Cloudinary once the new one is safely saved.
-      const [existing] = await db.query(
-        "SELECT hero_image FROM articles WHERE id=?",
-        [id],
-      );
-
-      oldImageUrl = existing[0] ? existing[0].hero_image : null;
-
-      sql += ", hero_image=?";
-
+      sql += ", hero_image = ?";
       values.push(req.file.cloudinaryUrl);
+
+      oldImageUrl = article.hero_image;
     }
 
-    sql += " WHERE id=?";
-
-    values.push(id);
+    sql += " WHERE id = ?";
+    values.push(article.id);
 
     await db.query(sql, values);
 
+    // Delete the old Cloudinary image after the database update succeeds.
     if (oldImageUrl) {
-      await deleteAssetByUrl(oldImageUrl);
+      try {
+        await deleteAssetByUrl(oldImageUrl);
+      } catch (deleteError) {
+        console.error(
+          "Failed to delete old Cloudinary image:",
+          deleteError
+        );
+      }
     }
 
-    res.json({
-      message: "Article updated",
+    return res.json({
+      success: true,
+      message: "Article updated successfully",
     });
   } catch (err) {
-    res.status(500).json({
-      message: "Server Error",
+    console.error("Update article error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update article",
     });
   }
 };
+
 
 exports.deleteArticle = async (req, res) => {
   try {

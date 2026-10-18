@@ -25,7 +25,7 @@ router.get("/", verifyToken, authorize("admin"), article.getArticles);
 router.get("/:slug", article.getArticle);
 
 router.put(
-  "/:id",
+  "/:slug",
   verifyToken,
   authorize("admin"),
   upload.single("hero_image"),

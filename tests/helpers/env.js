@@ -14,3 +14,15 @@ process.env.DB_USER = "test";
 process.env.DB_PASSWORD = "test";
 process.env.DB_NAME = "test";
 process.env.DB_PORT = "3306";
+
+// Rate limits are exercised by tests/security/rateLimit.test.js, which
+// sets its own low values. Everywhere else they're set high enough
+// that ordinary suites never trip them.
+process.env.PAYMENT_RATE_LIMIT ??= "10000";
+process.env.LOGIN_RATE_LIMIT ??= "10000";
+process.env.REGISTER_RATE_LIMIT ??= "10000";
+process.env.CONTACT_RATE_LIMIT ??= "10000";
+process.env.DIAGNOSIS_RATE_LIMIT_USER ??= "10000";
+process.env.DIAGNOSIS_RATE_LIMIT_GUEST ??= "10000";
+process.env.AI_DAILY_LIMIT_PER_CALLER ??= "10000";
+process.env.AI_DAILY_LIMIT_GLOBAL ??= "10000";

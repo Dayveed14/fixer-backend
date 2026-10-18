@@ -9,6 +9,7 @@ jest.mock("../../services/notificationService");
 jest.mock("../../services/meshCentralService");
 jest.mock("../../services/paystackService");
 jest.mock("../../services/gemini");
+jest.mock("../../services/pricingService");
 
 const jwt = require("jsonwebtoken");
 const db = require("../../config/db");

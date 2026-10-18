@@ -40,37 +40,8 @@ describe("POST /api/bookings", () => {
     expect(res.status).toBe(400);
   });
 
-  it("402s when Paystack can't verify the payment", async () => {
-    verifyPayment.mockRejectedValueOnce(new Error("Payment amount mismatch."));
-
-    const res = await request(app)
-      .post("/api/bookings")
-      .set("Authorization", authHeader({ id: 3, role: "user" }))
-      .send(validBookingBody);
-
-    expect(res.status).toBe(402);
-    expect(verifyPayment).toHaveBeenCalledWith("ref_123", 500000);
-  });
-
-  it("creates a booking for the logged-in customer, ignoring any user_id in the body", async () => {
-    db.query
-      .mockResolvedValueOnce([[{ first_name: "Ada", last_name: "L", email: "ada@x.com" }]]) // customer lookup
-      .mockResolvedValueOnce([{ insertId: 55 }]) // insert booking
-      .mockResolvedValueOnce([{}]); // update booking_reference
-
-    const res = await request(app)
-      .post("/api/bookings")
-      .set("Authorization", authHeader({ id: 3, role: "user" }))
-      .send({ ...validBookingBody, user_id: 999 }); // attempted spoof
-
-    expect(res.status).toBe(201);
-    expect(res.body.id).toBe(55);
-
-    // The INSERT's second bound param is user_id — must be 3 (the token),
-    // never 999 (the spoofed body value).
-    const insertCall = db.query.mock.calls[1];
-    expect(insertCall[1][1]).toBe(3);
-  });
+  // Payment verification + creation is covered in depth by
+  // tests/payments/bookingPayment.test.js.
 });
 
 describe("GET /api/bookings", () => {

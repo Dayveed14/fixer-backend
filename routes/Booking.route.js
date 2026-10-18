@@ -9,9 +9,15 @@ const {
   assignTechnician,
   updateBookingStatus,
   startRemoteSession,
+  getSupportTypes,
+  getBookingSlots,
 } = require("../controllers/Booking.Controller");
 const { paymentFlowLimiter } = require("../middleware/rateLimit");
 const { verifyToken, authorize } = require("../middleware/auth");
+
+// Public: prices and time slots for the BookCall picker.
+router.get("/support-types", getSupportTypes);
+router.get("/slots", getBookingSlots);
 
 router.post("/", verifyToken, paymentFlowLimiter, createBooking);
 

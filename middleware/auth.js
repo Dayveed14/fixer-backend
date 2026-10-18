@@ -69,4 +69,31 @@ function authorize(...allowedRoles) {
   };
 }
 
-module.exports = { verifyToken, authorize };
+/* ===========================
+   OPTIONAL AUTH
+   For endpoints that work for guests but should know who a logged-in
+   caller is (e.g. FixBot). Sets req.user from a VALID token if there is
+   one; otherwise leaves req.user undefined. An invalid/expired token is
+   treated as a guest, never as whoever the body claims to be — identity
+   only ever comes from a verified token.
+=========================== */
+function optionalAuth(req, res, next) {
+  let token = req.cookies?.[COOKIE_NAME];
+
+  if (!token) {
+    const [scheme, headerToken] = (req.headers.authorization || "").split(" ");
+    if (scheme === "Bearer" && headerToken) token = headerToken;
+  }
+
+  if (token) {
+    try {
+      req.user = jwt.verify(token, process.env.JWT_SECRET);
+    } catch {
+      req.user = undefined;
+    }
+  }
+
+  return next();
+}
+
+module.exports = { verifyToken, authorize, optionalAuth };
