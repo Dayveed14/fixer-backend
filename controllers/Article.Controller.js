@@ -100,8 +100,7 @@ exports.getArticle = async (req, res) => {
       FROM articles
       INNER JOIN users
         ON users.id = articles.author_id
-      WHERE articles.slug = ?
-        AND articles.status = 'published'`,
+      WHERE articles.slug = ? `,
       [slug],
     );
 
