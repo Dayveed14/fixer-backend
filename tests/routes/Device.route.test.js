@@ -90,16 +90,37 @@ describe("PATCH /api/devices/:id/service", () => {
     expect(res.status).toBe(200);
   });
 
-  it("lets a technician update any device without an ownership check", async () => {
-    db.query.mockResolvedValueOnce([{}]);
+  it("blocks a technician from editing a customer's device", async () => {
+    db.query.mockResolvedValueOnce([[{ id: 1, customer_id: 999 }]]);
 
     const res = await request(app)
       .patch("/api/devices/1/service")
       .set("Authorization", authHeader({ role: "technician" }))
       .send({ last_serviced_at: "2026-01-01" });
 
+    expect(res.status).toBe(403);
+    expect(db.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets an admin update any device", async () => {
+    db.query.mockResolvedValueOnce([[{ id: 1, customer_id: 999 }]]).mockResolvedValueOnce([{}]);
+
+    const res = await request(app)
+      .patch("/api/devices/1/service")
+      .set("Authorization", authHeader({ role: "admin" }))
+      .send({ last_serviced_at: "2026-01-01" });
+
     expect(res.status).toBe(200);
-    expect(db.query).toHaveBeenCalledTimes(1); // no ownership lookup for staff
+  });
+
+  it("rejects a date that isn't a date", async () => {
+    const res = await request(app)
+      .patch("/api/devices/1/service")
+      .set("Authorization", authHeader())
+      .send({ last_serviced_at: "soon" });
+
+    expect(res.status).toBe(400);
+    expect(db.query).not.toHaveBeenCalled();
   });
 });
 
@@ -124,5 +145,32 @@ describe("DELETE /api/devices/:id", () => {
       .set("Authorization", authHeader({ id: 3, role: "user" }));
 
     expect(res.status).toBe(200);
+  });
+});
+
+describe("device hardening", () => {
+  it("blocks a technician deleting a customer's device", async () => {
+    db.query.mockResolvedValueOnce([[{ id: 1, customer_id: 999 }]]);
+
+    const res = await request(app)
+      .delete("/api/devices/1")
+      .set("Authorization", authHeader({ role: "technician" }));
+
+    expect(res.status).toBe(403);
+    expect(db.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps ?limit= at 100", async () => {
+    db.query.mockResolvedValueOnce([[]]);
+    await request(app).get("/api/devices?limit=999999").set("Authorization", authHeader());
+    expect(db.query.mock.calls[0][1]).toEqual([1, 100]);
+  });
+
+  it("rejects overlong device fields", async () => {
+    const res = await request(app)
+      .post("/api/devices")
+      .set("Authorization", authHeader())
+      .send({ device_name: "x".repeat(121) });
+    expect(res.status).toBe(400);
   });
 });

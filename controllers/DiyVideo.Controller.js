@@ -1,19 +1,26 @@
 const db = require("../config/db");
 const { deleteAssetByUrl, getVideoThumbnail } = require("../config/cloudinary");
+const { publishable } = require("../utils/validate");
+
+async function discardUpload(req) {
+  if (!req.file?.cloudinaryUrl) return;
+  try {
+    await deleteAssetByUrl(req.file.cloudinaryUrl);
+  } catch (err) {
+    console.error("Failed to remove rejected upload:", err.message);
+  }
+}
 
 exports.createVideo = async (req, res) => {
   try {
-    const {
-      title,
-      slug,
-      excerpt,
-      content,
-      category,
-      tags,
-      featured,
-      status,
-      author_id,
-    } = req.body;
+    const { problem, values } = publishable(req.body);
+    if (problem) {
+      await discardUpload(req);
+      return res.status(400).json({ message: problem });
+    }
+
+    const { title, slug, excerpt, content, category, tags, featured, status } = values;
+    const author_id = req.user.id;
 
     const video_url = req.file ? req.file.cloudinaryUrl : null;
     const thumbnail_url = video_url ? getVideoThumbnail(video_url) : null;
@@ -59,8 +66,13 @@ exports.createVideo = async (req, res) => {
 
     res.status(201).json({
       message: "Video created.",
+      slug,
     });
   } catch (err) {
+    if (err.code === "ER_DUP_ENTRY") {
+      await discardUpload(req);
+      return res.status(409).json({ message: "A video with this slug already exists." });
+    }
     console.log(err);
 
     res.status(500).json({
@@ -133,8 +145,12 @@ exports.updateVideo = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { title, slug, excerpt, content, category, tags, featured, status } =
-      req.body;
+    const { problem, values: clean } = publishable(req.body);
+    if (problem) {
+      await discardUpload(req);
+      return res.status(400).json({ message: problem });
+    }
+    const { title, slug, excerpt, content, category, tags, featured, status } = clean;
 
     let sql = `
 UPDATE diy_videos
@@ -194,6 +210,11 @@ status=?
       message: "Video updated",
     });
   } catch (err) {
+    if (err.code === "ER_DUP_ENTRY") {
+      await discardUpload(req);
+      return res.status(409).json({ message: "A video with this slug already exists." });
+    }
+    console.error(err);
     res.status(500).json({
       message: "Server Error",
     });

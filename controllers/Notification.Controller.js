@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const { parseLimit } = require("../utils/validate");
 
 /* ===========================
    GET NOTIFICATIONS
@@ -14,7 +15,7 @@ exports.getNotifications = async (req, res) => {
     // just by passing a different user_id.
     const userId = req.user.id;
     const role = req.user.role;
-    const limit = Number(req.query.limit) || 20;
+    const limit = parseLimit(req.query.limit, 100) || 20;
 
     const [notifications] = await db.query(
       `

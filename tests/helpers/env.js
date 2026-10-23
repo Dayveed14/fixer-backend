@@ -26,3 +26,4 @@ process.env.DIAGNOSIS_RATE_LIMIT_USER ??= "10000";
 process.env.DIAGNOSIS_RATE_LIMIT_GUEST ??= "10000";
 process.env.AI_DAILY_LIMIT_PER_CALLER ??= "10000";
 process.env.AI_DAILY_LIMIT_GLOBAL ??= "10000";
+process.env.PASSWORD_RATE_LIMIT ??= "10000";

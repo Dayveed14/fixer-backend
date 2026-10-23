@@ -2,7 +2,7 @@ const express = require("express");
 
 const router = express.Router();
 
-const upload = require("../middleware/upload");
+const { imageUpload: upload } = require("../middleware/upload");
 const uploadToCloudinary = require("../middleware/cloudinaryUpload");
 
 const article = require("../controllers/Article.Controller");

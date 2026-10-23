@@ -1,5 +1,7 @@
 const express = require("express");
 const db = require("../config/db");
+const monitor = require("../services/monitor");
+const { verifyToken, authorize } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -43,6 +45,13 @@ router.get("/ready", async (req, res) => {
   } finally {
     clearTimeout(timer);
   }
+});
+
+// GET /api/health/metrics — admin: error counts, recent alerts, and a
+// fresh payment-health check.
+router.get("/metrics", verifyToken, authorize("admin"), async (req, res) => {
+  const payments = await monitor.checkPaymentHealth();
+  res.json({ ...monitor.snapshot(), payments });
 });
 
 module.exports = router;

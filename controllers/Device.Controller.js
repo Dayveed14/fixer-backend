@@ -1,4 +1,24 @@
 const db = require("../config/db");
+const { parseLimit, textProblem, parseId } = require("../utils/validate");
+
+// Only the device's owner or an admin may change or remove it.
+async function loadOwnedDevice(req, res, action) {
+  const id = parseId(req.params.id);
+  if (!id) {
+    res.status(400).json({ message: "Invalid device id." });
+    return null;
+  }
+  const [[device]] = await db.query("SELECT id, customer_id FROM devices WHERE id = ?", [id]);
+  if (!device) {
+    res.status(404).json({ message: "Device not found." });
+    return null;
+  }
+  if (req.user.role !== "admin" && Number(device.customer_id) !== Number(req.user.id)) {
+    res.status(403).json({ message: `You do not have permission to ${action} this device.` });
+    return null;
+  }
+  return device;
+}
 
 /* ===========================
    REGISTER DEVICE
@@ -6,16 +26,20 @@ const db = require("../config/db");
 
 exports.createDevice = async (req, res) => {
   try {
-    const { device_name, brand, os, serial_number } = req.body;
+    const { device_name, brand, os, serial_number } = req.body || {};
     // Always the caller's own id — a customer can only register a device
     // to their own account. Admins registering on a customer's behalf
     // isn't a supported flow in the frontend today.
     const customer_id = req.user.id;
 
-    if (!device_name) {
-      return res.status(400).json({
-        message: "device_name is required.",
-      });
+    const problem = textProblem(req.body, {
+      device_name: [120, true],
+      brand: [80, false],
+      os: [80, false],
+      serial_number: [120, false],
+    });
+    if (problem) {
+      return res.status(400).json({ message: problem });
     }
 
     const sql = `
@@ -63,7 +87,7 @@ exports.getDevices = async (req, res) => {
       req.user.role === "admin"
         ? Number(req.query.customer_id) || null
         : req.user.id;
-    const limit = Number(req.query.limit) || null;
+    const limit = parseLimit(req.query.limit);
 
     let sql = `
       SELECT
@@ -110,31 +134,18 @@ exports.getDevices = async (req, res) => {
 
 exports.updateDeviceService = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { last_serviced_at } = req.body;
+    const { last_serviced_at } = req.body || {};
 
-    // Only the owning customer (or an admin/technician doing the
-    // servicing) may touch this record.
-    if (req.user.role === "user") {
-      const [[device]] = await db.query(
-        "SELECT customer_id FROM devices WHERE id = ?",
-        [id],
-      );
-
-      if (!device) {
-        return res.status(404).json({ message: "Device not found." });
-      }
-
-      if (device.customer_id !== req.user.id) {
-        return res.status(403).json({
-          message: "You do not have permission to update this device.",
-        });
-      }
+    if (!last_serviced_at || Number.isNaN(Date.parse(last_serviced_at))) {
+      return res.status(400).json({ message: "last_serviced_at must be a date." });
     }
 
+    const device = await loadOwnedDevice(req, res, "update");
+    if (!device) return undefined;
+
     await db.query("UPDATE devices SET last_serviced_at = ? WHERE id = ?", [
-      last_serviced_at,
-      id,
+      new Date(last_serviced_at),
+      device.id,
     ]);
 
     return res.json({
@@ -155,27 +166,10 @@ exports.updateDeviceService = async (req, res) => {
 
 exports.deleteDevice = async (req, res) => {
   try {
-    const { id } = req.params;
+    const device = await loadOwnedDevice(req, res, "delete");
+    if (!device) return undefined;
 
-    // Same rule as above: customers may only delete their own devices.
-    if (req.user.role === "user") {
-      const [[device]] = await db.query(
-        "SELECT customer_id FROM devices WHERE id = ?",
-        [id],
-      );
-
-      if (!device) {
-        return res.status(404).json({ message: "Device not found." });
-      }
-
-      if (device.customer_id !== req.user.id) {
-        return res.status(403).json({
-          message: "You do not have permission to delete this device.",
-        });
-      }
-    }
-
-    await db.query("DELETE FROM devices WHERE id = ?", [id]);
+    await db.query("DELETE FROM devices WHERE id = ?", [device.id]);
 
     return res.json({
       message: "Device deleted",

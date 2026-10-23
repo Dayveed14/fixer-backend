@@ -84,3 +84,54 @@ describe("app module", () => {
     expect(db.query).not.toHaveBeenCalled();
   });
 });
+
+describe("production start-up configuration", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const root = path.join(__dirname, "..", "..");
+  const pkg = require("../../package.json");
+
+  it("starts with plain node in production (nodemon is a dev dependency)", () => {
+    expect(pkg.scripts.start).toBe("node app.js");
+    expect(pkg.dependencies.nodemon).toBeUndefined();
+    expect(fs.existsSync(path.join(root, pkg.main))).toBe(true);
+  });
+
+  it("declares a Node version", () => {
+    expect(pkg.engines.node).toMatch(/>=\s*20/);
+  });
+
+  it(".env.example documents every env var the app reads", () => {
+    const example = fs.readFileSync(path.join(root, ".env.example"), "utf8");
+    const used = new Set();
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (["node_modules", "tests", ".git", "scripts"].includes(entry.name)) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".js")) {
+          const src = fs.readFileSync(full, "utf8");
+          for (const m of src.matchAll(/process\.env\.([A-Z][A-Z0-9_]+)/g)) used.add(m[1]);
+          for (const m of src.matchAll(/env(?:Int|Number)\("([A-Z0-9_]+)"/g)) used.add(m[1]);
+          for (const m of src.matchAll(/\benv\.([A-Z][A-Z0-9_]+)/g)) used.add(m[1]);
+          for (const m of src.matchAll(/\b(MESHCENTRAL_[A-Z_]+)\b/g)) used.add(m[1]);
+        }
+      }
+    };
+    walk(root);
+    const missing = [...used].filter((name) => !example.includes(name) && name !== "NODE_ENV_TEST");
+    expect(missing).toEqual([]);
+  });
+
+  it("never commits real env files but keeps the example", () => {
+    const ignore = fs.readFileSync(path.join(root, ".gitignore"), "utf8");
+    expect(ignore).toMatch(/^\.env$/m);
+    expect(ignore).toMatch(/^!\.env\.example$/m);
+  });
+
+  it("uses TLS to the database unless DB_SSL=false", () => {
+    const src = fs.readFileSync(path.join(root, "config", "db.js"), "utf8");
+    expect(src).toMatch(/rejectUnauthorized: true/);
+    expect(src).toMatch(/DB_SSL/);
+  });
+});

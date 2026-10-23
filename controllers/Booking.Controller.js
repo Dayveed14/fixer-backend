@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const { parseLimit } = require("../utils/validate");
 const { generateInviteLink } = require("../services/meshCentralService");
 const createNotification = require("../services/notificationService");
 const sendMail = require("../services/mailService");
@@ -324,7 +325,7 @@ exports.getBookings = async (req, res) => {
     const status = req.query.status || null;
     const today = req.query.today === "true";
     const upcoming = req.query.upcoming === "true";
-    const limit = Number(req.query.limit) || null;
+    const limit = parseLimit(req.query.limit, 200);
 
     let sql = `
       SELECT

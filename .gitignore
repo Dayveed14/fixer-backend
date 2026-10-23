@@ -1,9 +1,14 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 /node_modules
 /.pnp
 .pnp.js
 
+# secrets: real env files are never committed; the example is
 .env
-.env.*".env" 
+.env.*
+!.env.example
+
+# local backups and test output
+/backups
+/coverage
+*.sql.gz

@@ -80,3 +80,14 @@ The frontend production build is checked in the frontend repo
 3. Queue up `db.query.mockResolvedValueOnce(...)` once per query the
    handler will make, in call order — check the controller if unsure.
 4. `request(app).get("/api/whatever").set("Authorization", authHeader({ role: "..." }))`
+
+## Integration tests (real database)
+
+`tests/integration/*.int.test.js` run the real app against a fresh MySQL/MariaDB
+database built from `db/schema.sql` + `migrations/` (see `jest.integration.config.js`).
+Only Paystack, email, AI and MeshCentral are faked. They cover concurrent
+payment submissions, webhook replays and races, rollback on failure, the whole
+repair lifecycle, approve/decline races, sessions and password changes, admin
+user management, every dashboard query, and migration rollbacks.
+
+    DB_HOST=127.0.0.1 DB_USER=root DB_PASSWORD=secret npm run test:integration

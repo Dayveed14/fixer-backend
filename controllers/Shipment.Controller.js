@@ -684,14 +684,29 @@ exports.respondToQuote = async (req, res) => {
     let amountPaid = 0;
     let alreadyAnswered = false;
 
+    // What this decision costs under a given quote.
+    const quoteAmount = (row) =>
+      decision === "approve"
+        ? Number(row.repair_cost) + Number(row.return_fee)
+        : Number(row.return_fee);
+
     const applyDecision = async (executor, paymentReference) => {
       const [rows] = await executor.query(
-        "SELECT status, approval_status FROM shipments WHERE id = ? FOR UPDATE",
+        "SELECT status, approval_status, repair_cost, return_fee FROM shipments WHERE id = ? FOR UPDATE",
         [shipment.id],
       );
       const locked = rows[0];
       if (!locked || locked.status !== "waiting_approval" || locked.approval_status !== "pending") {
         throw new PaymentError(409, "This quote has already been answered.", "QUOTE_ANSWERED");
+      }
+      // Re-checked under the lock: the quote can't change between
+      // verifying the payment and applying it.
+      if (paymentReference && Math.round(quoteAmount(locked) * 100) !== Math.round(amountPaid * 100)) {
+        throw new PaymentError(
+          409,
+          "Your quote was updated after you paid. Our team has been alerted and will sort out the difference with you.",
+          "QUOTE_CHANGED",
+        );
       }
       await executor.query(
         `UPDATE shipments
@@ -724,7 +739,7 @@ exports.respondToQuote = async (req, res) => {
         reference: payment_reference,
         userId: req.user.id,
         purpose: decision === "approve" ? "repair" : "return",
-        details: { shipment_id: String(shipment.id) },
+        details: { shipment_id: String(shipment.id), quote_amount: String(quoteAmount(shipment)) },
       });
       amountPaid = Number(payment.amount_kobo) / 100;
 

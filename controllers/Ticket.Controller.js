@@ -1,4 +1,8 @@
 const db = require("../config/db");
+const { parseLimit, textProblem } = require("../utils/validate");
+
+const TICKET_STATUSES = ["Open", "In Progress", "Completed", "Pending"];
+const TICKET_PRIORITIES = ["Low", "Medium", "High"];
 
 /* ===========================
    CREATE TICKET
@@ -14,12 +18,29 @@ exports.createTicket = async (req, res) => {
       priority,
       technician_id,
       status,
-    } = req.body;
+    } = req.body || {};
 
     if (!customer_name || !issue) {
       return res.status(400).json({
         message: "customer_name and issue are required.",
       });
+    }
+
+    const problem = textProblem(req.body, {
+      customer_name: [120, true],
+      issue: [2000, true],
+      device: [120, false],
+    });
+    if (problem) {
+      return res.status(400).json({ message: problem });
+    }
+
+    if (priority && !TICKET_PRIORITIES.includes(priority)) {
+      return res.status(400).json({ message: "Invalid priority." });
+    }
+
+    if (status && !TICKET_STATUSES.includes(status)) {
+      return res.status(400).json({ message: "Invalid status." });
     }
 
     // Insert first (ticket_code is nullable at this point), then derive the
@@ -77,7 +98,7 @@ exports.createTicket = async (req, res) => {
 
 exports.getTickets = async (req, res) => {
   try {
-    const limit = Number(req.query.limit) || null;
+    const limit = parseLimit(req.query.limit, 200);
     // Same self-scoping as bookings: customers and technicians are
     // always forced to their own id, admins can filter by anyone's.
     const customerId =

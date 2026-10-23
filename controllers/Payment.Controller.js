@@ -142,7 +142,9 @@ exports.initializePayment = async (req, res) => {
         email: req.user.email,
         purpose,
         amountNaira,
-        metadata: { shipment_id: String(shipment.id) },
+        // The amount is bound to the quote: if the admin re-quotes while
+        // the customer is paying, the old payment can't be applied.
+        metadata: { shipment_id: String(shipment.id), quote_amount: String(amountNaira) },
       });
 
       return res.status(201).json(intent);

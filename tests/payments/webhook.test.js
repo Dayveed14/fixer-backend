@@ -103,3 +103,35 @@ it("500s on a DB error so Paystack retries later", async () => {
   const res = await deliver(event());
   expect(res.status).toBe(500);
 });
+
+describe("payment alerts", () => {
+  const sendMail = require("../../services/mailService");
+  const monitor = require("../../services/monitor");
+
+  it("an amount mismatch from the webhook alerts the admin", async () => {
+    monitor.resetMonitor();
+    process.env.ADMIN_EMAIL = "ops@example.com";
+    sendMail.mockClear();
+    const { routeQueries } = require("../helpers/sqlRouter");
+    routeQueries(db.query, [
+      [/SELECT \* FROM payment_transactions/, [[{ reference: "FXB_ALERT", status: "pending", amount_kobo: 1500000, currency: "NGN", user_id: 3 }]]],
+      [/UPDATE payment_transactions/, [{ affectedRows: 1 }]],
+    ]);
+    const body = { event: "charge.success", data: { reference: "FXB_ALERT", amount: 100, currency: "NGN" } };
+    const raw = JSON.stringify(body);
+    const signature = require("crypto").createHmac("sha512", process.env.PAYSTACK_SECRET_KEY).update(raw).digest("hex");
+
+    const res = await request(app)
+      .post("/api/payments/webhook")
+      .set("Content-Type", "application/json")
+      .set("x-paystack-signature", signature)
+      .send(raw);
+
+    expect(res.body.outcome).toBe("marked_mismatch");
+    await new Promise((r) => setImmediate(r));
+    expect(sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: "[Fixer alert] Payment amount/currency mismatch" }),
+      "admin",
+    );
+  });
+});

@@ -53,14 +53,24 @@ describe("POST /api/users/login", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 404 for an unknown email", async () => {
+  it("gives an unknown email the same 401 as a wrong password (no enumeration)", async () => {
     db.query.mockResolvedValueOnce([[]]);
 
     const res = await request(app)
       .post("/api/users/login")
       .send({ email: "nobody@example.com", password: "whatever" });
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
+    expect(res.body.message).toBe("Incorrect email or password.");
+  });
+
+  it("rejects non-string credentials without touching the database", async () => {
+    const res = await request(app)
+      .post("/api/users/login")
+      .send({ email: { $gt: "" }, password: ["x"] });
+
+    expect(res.status).toBe(400);
+    expect(db.query).not.toHaveBeenCalled();
   });
 
   it("returns 401 for the wrong password", async () => {
@@ -252,5 +262,197 @@ describe("GET /api/users (admin-only)", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
+  });
+});
+
+describe("registration and staff-account validation", () => {
+  it.each([
+    [{ first_name: "Ada", last_name: "L", email: "not-an-email", password: "password123" }, /valid email/i],
+    [{ first_name: "Ada", last_name: "L", email: "ada@example.com", password: "short" }, /8 and 72/],
+    [{ first_name: "Ada", last_name: "L", email: "ada@example.com", password: "x".repeat(73) }, /8 and 72/],
+    [{ first_name: "A".repeat(81), last_name: "L", email: "ada@example.com", password: "password123" }, /too long/i],
+    [{ first_name: ["Ada"], last_name: "L", email: "ada@example.com", password: "password123" }, /invalid/i],
+  ])("register rejects bad input %#", async (body, message) => {
+    const res = await request(app).post("/api/users/register").send(body);
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(message);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("admin create-user applies the same rules", async () => {
+    const res = await request(app)
+      .post("/api/users/create")
+      .set("Authorization", authHeader({ role: "admin" }))
+      .send({ first_name: "T", last_name: "Ech", email: "t@example.com", password: "123", role: "technician" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/8 and 72/);
+  });
+});
+
+describe("GET /api/users/technicians field exposure", () => {
+  it("only gives non-admins technician names", async () => {
+    db.query.mockResolvedValueOnce([[{ id: 3, first_name: "Tee", last_name: "Ech" }]]);
+
+    const res = await request(app)
+      .get("/api/users/technicians")
+      .set("Authorization", authHeader({ role: "technician" }));
+
+    expect(res.status).toBe(200);
+    expect(db.query.mock.calls[0][0]).not.toMatch(/email|phone/);
+  });
+
+  it("gives admins contact details", async () => {
+    db.query.mockResolvedValueOnce([[]]);
+
+    await request(app)
+      .get("/api/users/technicians")
+      .set("Authorization", authHeader({ role: "admin" }));
+
+    expect(db.query.mock.calls[0][0]).toMatch(/email, phone/);
+  });
+});
+
+describe("PATCH /api/users/me/password", () => {
+  const sessionService = require("../../services/sessionService");
+  const sendMail = require("../../services/mailService");
+
+  async function userRow(password = "old-password-1", extra = {}) {
+    return { id: 1, first_name: "Ada", email: "ada@example.com", role: "user", token_version: 2, password: await bcrypt.hash(password, 4), ...extra };
+  }
+
+  it("requires a session", async () => {
+    const res = await request(app)
+      .patch("/api/users/me/password")
+      .send({ current_password: "old-password-1", new_password: "new-password-1" });
+    expect(res.status).toBe(401);
+  });
+
+  it.each(["technician", "admin", "user"])("lets a %s change their password, ends other sessions and reissues the cookie", async (role) => {
+    db.query
+      .mockResolvedValueOnce([[await userRow("old-password-1", { role })]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+    const res = await request(app)
+      .patch("/api/users/me/password")
+      .set("Authorization", authHeader({ id: 1, role }))
+      .send({ current_password: "old-password-1", new_password: "new-password-1" });
+
+    expect(res.status).toBe(200);
+    const [sql, params] = db.query.mock.calls[1];
+    expect(sql).toMatch(/UPDATE users SET password = \?, token_version = \?/);
+    expect(params[1]).toBe(3);
+    expect(await bcrypt.compare("new-password-1", params[0])).toBe(true);
+    expect(sessionService.invalidateSession).toHaveBeenCalledWith(1);
+
+    const cookie = res.headers["set-cookie"].join(";");
+    expect(cookie).toMatch(/fixer_token=/);
+    const token = cookie.match(/fixer_token=([^;]+)/)[1];
+    const jwt = require("jsonwebtoken");
+    expect(jwt.decode(token).tv).toBe(3);
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ to: "ada@example.com" }), "support");
+  });
+
+  it("rejects a wrong current password", async () => {
+    db.query.mockResolvedValueOnce([[await userRow()]]);
+
+    const res = await request(app)
+      .patch("/api/users/me/password")
+      .set("Authorization", authHeader({ id: 1 }))
+      .send({ current_password: "nope-nope-1", new_password: "new-password-1" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/incorrect/i);
+    expect(db.query).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [{ new_password: "new-password-1" }, /current password/i],
+    [{ current_password: "old-password-1", new_password: "short" }, /8 and 72/],
+    [{ current_password: "old-password-1", new_password: "old-password-1" }, /haven't just used/],
+  ])("validates the request %#", async (body, message) => {
+    const res = await request(app)
+      .patch("/api/users/me/password")
+      .set("Authorization", authHeader({ id: 1 }))
+      .send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(message);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("still changes the password before the session migration has run", async () => {
+    const missing = Object.assign(new Error("Unknown column"), { code: "ER_BAD_FIELD_ERROR" });
+    db.query
+      .mockResolvedValueOnce([[await userRow()]])
+      .mockRejectedValueOnce(missing)
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+    const res = await request(app)
+      .patch("/api/users/me/password")
+      .set("Authorization", authHeader({ id: 1 }))
+      .send({ current_password: "old-password-1", new_password: "new-password-1" });
+
+    expect(res.status).toBe(200);
+    expect(db.query.mock.calls[2][0]).toBe("UPDATE users SET password = ? WHERE id = ?");
+  });
+});
+
+describe("admin user management", () => {
+  const admin = () => authHeader({ id: 99, role: "admin" });
+  const sessionService = require("../../services/sessionService");
+
+  it.each([
+    ["get", "/api/users/5"],
+    ["patch", "/api/users/5"],
+    ["delete", "/api/users/5"],
+  ])("%s %s is admin-only", async (method, url) => {
+    const res = await request(app)[method](url).set("Authorization", authHeader({ role: "technician" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("edits a technician and ends their sessions when the role changes", async () => {
+    db.query
+      .mockResolvedValueOnce([[{ id: 5, first_name: "T", last_name: "E", role: "technician" }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+    const res = await request(app)
+      .patch("/api/users/5")
+      .set("Authorization", admin())
+      .send({ first_name: " Tee ", last_name: "Ech", phone: "0803", role: "user" });
+
+    expect(res.status).toBe(200);
+    expect(db.query.mock.calls[1][1]).toEqual(["Tee", "Ech", "0803", "user", 5]);
+    expect(sessionService.invalidateSession).toHaveBeenCalledWith(5);
+  });
+
+  it("refuses to promote anyone to admin or edit an admin", async () => {
+    db.query.mockResolvedValueOnce([[{ id: 5, first_name: "T", last_name: "E", role: "user" }]]);
+    const promote = await request(app)
+      .patch("/api/users/5")
+      .set("Authorization", admin())
+      .send({ first_name: "T", last_name: "E", role: "admin" });
+    expect(promote.status).toBe(400);
+
+    db.query.mockResolvedValueOnce([[{ id: 6, role: "admin" }]]);
+    const other = await request(app).delete("/api/users/6").set("Authorization", admin());
+    expect(other.status).toBe(403);
+  });
+
+  it("won't delete an account with history", async () => {
+    db.query.mockResolvedValueOnce([[{ id: 5, role: "user" }]]).mockResolvedValueOnce([[{ n: 2 }]]);
+    const res = await request(app).delete("/api/users/5").set("Authorization", admin());
+    expect(res.status).toBe(409);
+    expect(db.query).toHaveBeenCalledTimes(2);
+  });
+
+  it("deletes an account with no history", async () => {
+    db.query
+      .mockResolvedValueOnce([[{ id: 5, role: "user" }]])
+      .mockResolvedValueOnce([[{ n: 0 }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+    const res = await request(app).delete("/api/users/5").set("Authorization", admin());
+    expect(res.status).toBe(200);
+    expect(db.query.mock.calls[2]).toEqual(["DELETE FROM users WHERE id = ?", [5]]);
   });
 });

@@ -54,6 +54,19 @@ const loginLimiter = rateLimit({
   },
 });
 
+// Password changes: stops guessing the current password from a hijacked
+// session. Per account.
+const passwordLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES,
+  limit: envInt("PASSWORD_RATE_LIMIT", 5),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  message: {
+    message: "Too many password attempts. Please try again in a little while.",
+  },
+});
+
 // Registration: stops scripted account creation.
 const registerLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -90,4 +103,5 @@ module.exports = {
   loginLimiter,
   registerLimiter,
   diagnosisLimiter,
+  passwordLimiter,
 };

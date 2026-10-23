@@ -1,20 +1,28 @@
 const db = require("../config/db");
 const { deleteAssetByUrl } = require("../config/cloudinary");
+const { publishable } = require("../utils/validate");
+
+// Removes a just-uploaded file when the request is rejected afterwards,
+// so failed saves don't leave orphans in Cloudinary.
+async function discardUpload(req) {
+  if (!req.file?.cloudinaryUrl) return;
+  try {
+    await deleteAssetByUrl(req.file.cloudinaryUrl);
+  } catch (err) {
+    console.error("Failed to remove rejected upload:", err.message);
+  }
+}
 
 exports.createArticle = async (req, res) => {
   try {
-    const {
-      title,
-      slug,
-      excerpt,
-      content,
-      category,
-      tags,
-      featured,
-      status,
-      author_id,
-      image_alt,
-    } = req.body;
+    const { problem, values } = publishable(req.body);
+    if (problem) {
+      await discardUpload(req);
+      return res.status(400).json({ message: problem });
+    }
+
+    const { title, slug, excerpt, content, category, tags, featured, status, image_alt } = values;
+    const author_id = req.user.id;
 
     const hero_image = req.file ? req.file.cloudinaryUrl : null;
 
@@ -53,8 +61,13 @@ exports.createArticle = async (req, res) => {
 
     res.status(201).json({
       message: "Article created.",
+      slug,
     });
   } catch (err) {
+    if (err.code === "ER_DUP_ENTRY") {
+      await discardUpload(req);
+      return res.status(409).json({ message: "An article with this slug already exists." });
+    }
     console.log(err);
 
     res.status(500).json({
@@ -163,16 +176,14 @@ exports.updateArticle = async (req, res) => {
   try {
     const { slug } = req.params;
 
-    const {
-      title,
-      excerpt,
-      content,
-      category,
-      tags,
-      featured,
-      status,
-      image_alt,
-    } = req.body;
+    // The slug is permanent on edit (it's the URL); everything else is
+    // validated like a new article.
+    const { problem, values: clean } = publishable({ ...req.body, slug: slug });
+    if (problem) {
+      await discardUpload(req);
+      return res.status(400).json({ message: problem });
+    }
+    const { title, excerpt, content, category, tags, featured, status, image_alt } = clean;
 
     // Find the existing article using its permanent slug.
     const [existing] = await db.query(

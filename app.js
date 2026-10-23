@@ -30,6 +30,7 @@ const healthApi = require("./routes/Health.route");
 const pricingApi = require("./routes/Pricing.route");
 
 const db = require("./config/db");
+const monitor = require("./services/monitor");
 
 const app = express();
 
@@ -42,6 +43,9 @@ app.set("trust proxy", 1);
 const PORT = process.env.PORT || 4000;
 
 /* Middleware */
+
+// Counts requests and alerts on bursts of server errors.
+app.use(monitor.requestMonitor);
 
 const allowedOrigins = [
   "http://localhost:5173",
@@ -93,12 +97,22 @@ app.use(cookieParser());
 // clients (mobile apps, Postman, the test suite) aren't affected.
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+//
+// Also enforced for any request a browser marks with an Origin header:
+// that closes "login CSRF" (a cross-site form silently logging the
+// victim into the attacker's account, where no cookie exists yet).
+// Browsers send Origin on every cross-site POST; server-to-server
+// callers (the Paystack webhook, Postman, tests) don't.
+const CSRF_EXEMPT = new Set(["/api/payments/webhook"]);
+
 app.use((req, res, next) => {
   const hasSessionCookie = Boolean(req.cookies?.[COOKIE_NAME]);
+  const fromBrowser = Boolean(req.headers.origin);
 
   if (
     MUTATING_METHODS.has(req.method) &&
-    hasSessionCookie &&
+    (hasSessionCookie || fromBrowser) &&
+    !CSRF_EXEMPT.has(req.path) &&
     req.headers["x-fixer-client"] !== "web"
   ) {
     return res.status(403).json({
@@ -173,6 +187,21 @@ app.use((err, req, res, next) => {
     return res.status(400).json({ message: "Malformed JSON in request body." });
   }
 
+  // Upload errors (multer): wrong type, too big, too many files.
+  if (err.name === "MulterError") {
+    const status = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+    const messages = {
+      LIMIT_FILE_SIZE: "That file is too large.",
+      LIMIT_FILE_COUNT: "Too many files.",
+      LIMIT_UNEXPECTED_FILE: "Unexpected file field.",
+    };
+    return res.status(status).json({ message: messages[err.code] || "Upload failed." });
+  }
+
+  if (err.code === "INVALID_FILE_TYPE") {
+    return res.status(400).json({ message: err.message });
+  }
+
   if (err.message === "Not allowed by CORS") {
     return res.status(403).json({ message: "Origin not allowed." });
   }
@@ -184,7 +213,7 @@ app.use((err, req, res, next) => {
 /* Server */
 
 if (require.main === module) {
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`Server Running on Port ${PORT}`);
   });
 
@@ -192,6 +221,37 @@ if (require.main === module) {
   // startup (so it catches up after Render wakes the service) and every
   // 5 minutes while running.
   require("./services/shipmentLifecycle").startAutoConfirmJob();
+
+  // Looks for paid-but-unused payments and failure spikes every 10 min.
+  monitor.startPaymentHealthJob();
+
+  // Graceful shutdown: Render sends SIGTERM on every deploy. Stop taking
+  // new connections, let in-flight requests (e.g. a payment being
+  // applied) finish, then close the DB pool.
+  let shuttingDown = false;
+  const shutdown = (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} received, shutting down…`);
+    const force = setTimeout(() => process.exit(1), 10000);
+    force.unref();
+    server.close(async () => {
+      try {
+        await db.end?.();
+      } catch (err) {
+        console.error("Closing the database pool failed:", err.message);
+      }
+      process.exit(0);
+    });
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+
+  process.on("unhandledRejection", (reason) => {
+    monitor.alert("unhandled_rejection", "Unhandled promise rejection", {
+      reason: String(reason?.stack || reason).slice(0, 500),
+    });
+  });
 }
 
 module.exports = app;

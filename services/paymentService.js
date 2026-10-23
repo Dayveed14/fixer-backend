@@ -92,6 +92,9 @@ function mapPaystackStatus(status) {
   }
 }
 
+// Loaded lazily: monitor → mailService, and tests mock both.
+const monitor = () => require("./monitor");
+
 async function recordEvent(executor, event) {
   const {
     reference,
@@ -328,12 +331,16 @@ async function confirmPayment({ reference, userId, purpose, details = {} }) {
     reason = `paystack status: ${data.status}`;
   }
 
-  await transitionStatus(db, tx, newStatus, {
+  const changedByVerify = await transitionStatus(db, tx, newStatus, {
     source: "verify",
     actorUserId: userId,
     detail: reason,
     paystack: data,
   });
+
+  if (changedByVerify && newStatus === "mismatch") {
+    monitor().paymentAlert("mismatch", { reference: tx.reference, reason, source: "verify", user_id: tx.user_id });
+  }
 
   if (newStatus === "success") {
     return { ...tx, status: "success" };
@@ -415,6 +422,15 @@ async function fulfillPayment({ reference, entityType, actorUserId, create }) {
     } catch {
       /* already rolled back */
     }
+    // The customer has paid but nothing was created — someone needs to
+    // follow up (refund or apply it by hand).
+    if (err.code !== "NOT_PAID") {
+      monitor().paymentAlert("unapplied", {
+        reference,
+        entity_type: entityType,
+        reason: err.code || err.message,
+      });
+    }
     throw err;
   } finally {
     connection.release();
@@ -471,6 +487,10 @@ async function handleWebhookEvent(payload) {
     detail: reason,
     paystack: data,
   });
+
+  if (changed && newStatus === "mismatch") {
+    monitor().paymentAlert("mismatch", { reference: tx.reference, reason, source: "webhook", user_id: tx.user_id });
+  }
 
   return changed ? `marked_${newStatus}` : "no_change";
 }

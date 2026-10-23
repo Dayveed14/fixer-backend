@@ -251,7 +251,7 @@ describe("paying for the repair (payment initialisation)", () => {
     expect(res.body.amount).toBe(29500);
     expect(res.body.reference).toMatch(/^FXR_/);
     const [insert] = callsMatching(db.query, /INSERT INTO payment_transactions/);
-    expect(JSON.parse(insert[1][5])).toEqual({ shipment_id: "3" });
+    expect(JSON.parse(insert[1][5])).toEqual({ shipment_id: "3", quote_amount: "29500" });
   });
 
   it("decline: charges only the return delivery", async () => {
@@ -296,7 +296,11 @@ describe("approving / declining the quote", () => {
     ...o,
   });
 
-  function givenAnswer(row, pay, lockedShipment = { status: "waiting_approval", approval_status: "pending" }) {
+  function givenAnswer(
+    row,
+    pay,
+    lockedShipment = { status: "waiting_approval", approval_status: "pending", repair_cost: 25000, return_fee: 4500 },
+  ) {
     given(row, [[/SELECT \* FROM payment_transactions/, [pay ? [pay] : []]]]);
     routeQueries(conn.query, [
       [/FROM payment_transactions[\s\S]*FOR UPDATE/, [[{ status: "success", entity_id: null }]]],
@@ -335,6 +339,35 @@ describe("approving / declining the quote", () => {
     expect(res.status).toBe(200);
     expect(res.body.approval_status).toBe("declined");
     expect(adminEmails()[0][0].subject).toMatch(/Repair declined/);
+  });
+
+  it("refuses a payment made for an older quote (re-quoted before paying finished)", async () => {
+    // Paid ₦29,500 for the first quote; admin has since raised it.
+    givenAnswer(quoted({ repair_cost: 40000 }), payment({ metadata: { shipment_id: "3", quote_amount: "29500" } }));
+
+    const res = await respond({ decision: "approve", payment_reference: "FXR_1" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("DETAILS_CHANGED");
+    expect(callsMatching(conn.query, /SET approval_status = \?/)).toHaveLength(0);
+  });
+
+  it("refuses to apply a payment if the quote changes between verifying and applying it", async () => {
+    givenAnswer(quoted(), payment(), {
+      status: "waiting_approval",
+      approval_status: "pending",
+      repair_cost: 40000,
+      return_fee: 4500,
+    });
+    verifyTransaction.mockResolvedValueOnce({ status: "success", currency: "NGN", amount: 2950000 });
+
+    const res = await respond({ decision: "approve", payment_reference: "FXR_1" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("QUOTE_CHANGED");
+    expect(callsMatching(conn.query, /SET approval_status = \?/)).toHaveLength(0);
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalled();
   });
 
   it("decline without payment when the policy is off", async () => {

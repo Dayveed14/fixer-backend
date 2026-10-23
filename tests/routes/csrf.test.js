@@ -47,4 +47,54 @@ describe("CSRF guard", () => {
     // normal auth (401, no token).
     expect(res.status).toBe(401);
   });
+
+  it("blocks a cross-site form login (login CSRF) even with no cookie yet", async () => {
+    const res = await request(app)
+      .post("/api/users/login")
+      .set("Origin", "https://evil.example")
+      .type("form")
+      .send("email=attacker@example.com&password=attackerpass");
+
+    // Blocked by CORS (unknown origin) or the CSRF guard — never logged in.
+    expect(res.status).toBe(403);
+    expect(res.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("blocks a browser request from an allowed origin that lacks the client header", async () => {
+    const res = await request(app)
+      .post("/api/users/login")
+      .set("Origin", "https://fixerng.app")
+      .send({ email: "a@example.com", password: "password123" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.message).toBe("Request blocked.");
+  });
+
+  it("lets the real frontend log in (allowed origin + client header)", async () => {
+    const res = await request(app)
+      .post("/api/users/login")
+      .set("Origin", "https://fixerng.app")
+      .set("X-Fixer-Client", "web")
+      .send({ email: "a@example.com", password: "password123" });
+
+    // Reaches the controller: unknown user → 401, not a CSRF 403.
+    expect(res.status).toBe(401);
+  });
+
+  it("never blocks the Paystack webhook (server-to-server, signed)", async () => {
+    const res = await request(app)
+      .post("/api/payments/webhook")
+      .set("Cookie", "fixer_token=x")
+      .send({ event: "charge.success" });
+
+    // Fails the signature check (401), not the CSRF guard (403).
+    expect(res.status).toBe(401);
+  });
+
+  it("covers PATCH and DELETE too", async () => {
+    for (const method of ["patch", "delete", "put"]) {
+      const res = await request(app)[method]("/api/users/me/password").set("Cookie", "fixer_token=x");
+      expect(res.status).toBe(403);
+    }
+  });
 });

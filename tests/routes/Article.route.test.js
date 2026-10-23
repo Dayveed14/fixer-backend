@@ -163,3 +163,72 @@ describe("DELETE /api/articles/:id (admin-only)", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("article/video input hardening", () => {
+  const admin = () => authHeader({ id: 7, role: "admin" });
+
+  it("takes the author from the session, never the form", async () => {
+    db.query.mockResolvedValueOnce([{ insertId: 1 }]);
+
+    await request(app)
+      .post("/api/articles")
+      .set("Authorization", admin())
+      .field("title", "Battery care")
+      .field("author_id", "999");
+
+    const [, params] = db.query.mock.calls[0];
+    expect(params[1]).toBe("battery-care"); // slug derived from the title
+    expect(params[9]).toBe(7);
+  });
+
+  it.each([
+    [{ status: "secret" }, /status/],
+    [{ title: "" }, /title/],
+    [{ slug: "!!!" , title: "!!!" }, /slug/],
+  ])("rejects bad fields %#", async (fields, message) => {
+    const req = request(app).post("/api/articles").set("Authorization", admin());
+    for (const [k, v] of Object.entries({ title: "Ok title", ...fields })) req.field(k, v);
+    const res = await req;
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(message);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("409s on a duplicate slug", async () => {
+    db.query.mockRejectedValueOnce(Object.assign(new Error("dup"), { code: "ER_DUP_ENTRY" }));
+    const res = await request(app)
+      .post("/api/articles")
+      .set("Authorization", admin())
+      .field("title", "Battery care");
+    expect(res.status).toBe(409);
+  });
+
+  it("refuses SVG uploads (they can carry scripts)", async () => {
+    const res = await request(app)
+      .post("/api/articles")
+      .set("Authorization", admin())
+      .field("title", "Battery care")
+      .attach("hero_image", Buffer.from("<svg onload=alert(1)>"), { filename: "x.svg", contentType: "image/svg+xml" });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/JPG, PNG/);
+  });
+
+  it("refuses a file whose extension merely contains an allowed one", async () => {
+    const res = await request(app)
+      .post("/api/articles")
+      .set("Authorization", admin())
+      .field("title", "Battery care")
+      .attach("hero_image", Buffer.from("MZ"), { filename: "photo.jpg.exe", contentType: "image/jpeg" });
+    expect(res.status).toBe(400);
+  });
+
+  it("refuses an image on the video endpoint", async () => {
+    const res = await request(app)
+      .post("/api/diy-videos")
+      .set("Authorization", admin())
+      .field("title", "Clean your fan")
+      .attach("video", Buffer.from("png"), { filename: "x.png", contentType: "image/png" });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/MP4/);
+  });
+});

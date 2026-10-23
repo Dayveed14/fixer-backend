@@ -108,6 +108,7 @@ const RECOMMENDED = [
   "CLOUDINARY_API_KEY",
   "CLOUDINARY_API_SECRET",
   "ADMIN_EMAIL",
+  "CONTACT_EMAIL_TO",
 ];
 
 function validateEnv(env = process.env) {
@@ -149,6 +150,10 @@ function validateEnv(env = process.env) {
       "PAYSTACK TEST MODE: The application is running in production " +
         "with Paystack test credentials. Do not use real customer funds.",
     );
+  }
+
+  if (env.NODE_ENV === "production" && String(env.DB_SSL).toLowerCase() === "false") {
+    console.warn("DB_SSL=false in production: the database connection is not encrypted.");
   }
 
   return {

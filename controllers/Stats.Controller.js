@@ -238,9 +238,9 @@ try {
     });
   }
 
-  // A regular user can only access their own dashboard stats.
+  // Customer dashboard stats: the customer themselves, or an admin.
   if (
-    req.user.role === "user" &&
+    req.user.role !== "admin" &&
     Number(userId) !== Number(req.user.id)
   ) {
     return res.status(403).json({

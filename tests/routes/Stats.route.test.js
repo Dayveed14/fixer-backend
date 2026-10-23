@@ -92,3 +92,13 @@ describe("GET /api/stats/technician/:technicianId", () => {
     expect(res.body.performancePercent).toBe(90);
   });
 });
+
+describe("GET /api/stats/user/:id access", () => {
+  it("blocks a technician from reading a customer's dashboard stats", async () => {
+    const res = await request(app)
+      .get("/api/stats/user/5")
+      .set("Authorization", authHeader({ id: 2, role: "technician" }));
+    expect(res.status).toBe(403);
+  });
+});
+

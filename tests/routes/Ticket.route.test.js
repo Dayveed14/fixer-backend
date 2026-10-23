@@ -250,3 +250,28 @@ describe("DELETE /api/tickets/:id (admin-only)", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("ticket input validation", () => {
+  it.each([
+    [{ customer_name: "Ada", issue: "Screen", priority: "Urgent!!" }, /priority/],
+    [{ customer_name: "Ada", issue: "Screen", status: "Hacked" }, /status/],
+    [{ customer_name: "Ada", issue: "x".repeat(2001) }, /issue/],
+  ])("rejects bad input %#", async (body, message) => {
+    const res = await request(app)
+      .post("/api/tickets")
+      .set("Authorization", authHeader({ role: "admin" }))
+      .send(body);
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(message);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("caps ?limit= at 200 and ignores junk", async () => {
+    db.query.mockResolvedValue([[]]);
+    await request(app).get("/api/tickets?limit=5000").set("Authorization", authHeader({ role: "admin" }));
+    await request(app).get("/api/tickets?limit=-3").set("Authorization", authHeader({ role: "admin" }));
+    expect(db.query.mock.calls[0][1]).toEqual([200]);
+    expect(db.query.mock.calls[1][0]).not.toMatch(/LIMIT/);
+  });
+});
+
