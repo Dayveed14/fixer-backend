@@ -47,6 +47,7 @@ const PORT = process.env.PORT || 4000;
 // Counts requests and alerts on bursts of server errors.
 app.use(monitor.requestMonitor);
 
+// "https://localhost" is the Android app (Capacitor WebView).
 const allowedOrigins = [
   "http://localhost:5173",
   "https://fixer-vite.vercel.app",
@@ -113,7 +114,7 @@ app.use((req, res, next) => {
     MUTATING_METHODS.has(req.method) &&
     (hasSessionCookie || fromBrowser) &&
     !CSRF_EXEMPT.has(req.path) &&
-    req.headers["x-fixer-client"] !== "web"
+    !["web", "android"].includes(req.headers["x-fixer-client"])
   ) {
     return res.status(403).json({
       message: "Request blocked.",

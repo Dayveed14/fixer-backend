@@ -232,3 +232,39 @@ describe("article/video input hardening", () => {
     expect(res.body.message).toMatch(/MP4/);
   });
 });
+
+describe("editing keeps the URL and featured flag", () => {
+  const admin = () => authHeader({ id: 7, role: "admin" });
+
+  it("editing a video without a slug keeps its current slug", async () => {
+    db.query
+      .mockResolvedValueOnce([[{ slug: "clean-your-fan" }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+    const res = await request(app)
+      .put("/api/diy-videos/4")
+      .set("Authorization", admin())
+      .field("title", "A brand new title")
+      .field("status", "published");
+
+    expect(res.status).toBe(200);
+    const [sql, params] = db.query.mock.calls[1];
+    expect(params[1]).toBe("clean-your-fan");
+    expect(sql).toMatch(/featured=COALESCE\(\?, featured\)/);
+    expect(params[6]).toBeNull(); // featured not sent → unchanged
+  });
+
+  it("404s when editing a video that doesn't exist", async () => {
+    db.query.mockResolvedValueOnce([[]]);
+    const res = await request(app).put("/api/diy-videos/99").set("Authorization", admin()).field("title", "X title");
+    expect(res.status).toBe(404);
+  });
+
+  it("editing an article without 'featured' leaves it as it was", async () => {
+    db.query.mockResolvedValueOnce([[{ id: 3, hero_image: null }]]).mockResolvedValueOnce([{ affectedRows: 1 }]);
+    await request(app).put("/api/articles/battery-care").set("Authorization", admin()).field("title", "Battery care");
+    const [sql, params] = db.query.mock.calls[1];
+    expect(sql).toMatch(/featured = COALESCE\(\?, featured\)/);
+    expect(params[5]).toBeNull();
+  });
+});

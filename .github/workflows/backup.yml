@@ -1,0 +1,36 @@
+name: Database backup
+
+# Nightly backup of the production database, kept as a private workflow
+# artifact for 14 days. Does nothing until the DB_* secrets are added
+# (Settings → Secrets and variables → Actions). The restore is checked
+# monthly by the verify job.
+on:
+  schedule:
+    - cron: "17 1 * * *" # 02:17 Lagos time
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip when secrets aren't configured
+        id: check
+        run: |
+          if [ -z "$DB_HOST" ]; then echo "No DB secrets — skipping."; echo "skip=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Back up
+        if: steps.check.outputs.skip != 'true'
+        run: BACKUP_DIR=backups bash scripts/backup-db.sh
+      - uses: actions/upload-artifact@v4
+        if: steps.check.outputs.skip != 'true'
+        with:
+          name: db-backup-${{ github.run_id }}
+          path: backups/
+          retention-days: 14

@@ -11,6 +11,11 @@ const escapeHtml = require("../utils/escapeHtml");
 // response timing doesn't reveal which emails have accounts.
 const DUMMY_HASH = "$2b$10$CwTycUXWue0Thq9StjUM0uJ8.TFbqo/6Yvb5mhW0ZcZlUj3V4Cj6e";
 
+// The Android app (a Capacitor WebView) can't rely on a cross-site
+// cookie, so it identifies itself and receives the token in the body,
+// then sends it as "Authorization: Bearer …". Browsers never get it.
+const isAndroidApp = (req) => req.get("X-Fixer-Client") === "android";
+
 function issueSession(res, user) {
   const token = jwt.sign(
     { id: user.id, email: user.email, role: user.role, tv: Number(user.token_version) || 0 },
@@ -18,6 +23,7 @@ function issueSession(res, user) {
     { expiresIn: "1d", algorithm: "HS256" },
   );
   res.cookie(COOKIE_NAME, token, cookieOptions);
+  return token;
 }
 
 // Shared by self-registration and admin-created accounts.
@@ -244,8 +250,8 @@ exports.loginUser = async (req, res) => {
       });
     }
 
-    // The session is an httpOnly cookie; the token is never in the body.
-    issueSession(res, user);
+    // Browsers: httpOnly cookie only. The Android app also gets the token.
+    const token = issueSession(res, user);
 
     return res.json({
       id: user.id,
@@ -254,6 +260,7 @@ exports.loginUser = async (req, res) => {
       email: user.email,
       phone: user.phone,
       role: user.role,
+      ...(isAndroidApp(req) ? { token } : {}),
     });
   } catch (error) {
     console.error(error);
@@ -350,7 +357,7 @@ exports.changePassword = async (req, res) => {
     }
 
     invalidateSession(user.id);
-    issueSession(res, { ...user, token_version: nextVersion });
+    const freshToken = issueSession(res, { ...user, token_version: nextVersion });
 
     try {
       await sendMail(
@@ -369,7 +376,10 @@ exports.changePassword = async (req, res) => {
       console.error("Password-change email failed:", mailError.message);
     }
 
-    return res.json({ message: "Password changed. You've been signed out on other devices." });
+    return res.json({
+      message: "Password changed. You've been signed out on other devices.",
+      ...(isAndroidApp(req) ? { token: freshToken } : {}),
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: "Internal Server Error" });

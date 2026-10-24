@@ -88,7 +88,7 @@ describe("PUT /api/diy-videos/:id (admin-only)", () => {
   });
 
   it("200s for an admin with no new file (no cloudinary cleanup triggered)", async () => {
-    db.query.mockResolvedValueOnce([{}]);
+    db.query.mockResolvedValueOnce([[{ slug: "old-slug" }]]).mockResolvedValueOnce([{}]);
 
     const res = await request(app)
       .put("/api/diy-videos/1")
@@ -96,7 +96,8 @@ describe("PUT /api/diy-videos/:id (admin-only)", () => {
       .send({ title: "Updated", status: "published" });
 
     expect(res.status).toBe(200);
-    expect(db.query).toHaveBeenCalledTimes(1);
+    // Looks up the current slug, then updates — no Cloudinary lookup.
+    expect(db.query).toHaveBeenCalledTimes(2);
   });
 });
 

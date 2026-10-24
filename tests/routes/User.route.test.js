@@ -456,3 +456,99 @@ describe("admin user management", () => {
     expect(db.query.mock.calls[2]).toEqual(["DELETE FROM users WHERE id = ?", [5]]);
   });
 });
+
+describe("Android app sessions", () => {
+  it("gives the Android app the token in the body; browsers never get it", async () => {
+    const hashed = await bcrypt.hash("password123", 4);
+    const row = [[{ id: 1, email: "ada@example.com", password: hashed, role: "user" }]];
+
+    db.query.mockResolvedValueOnce(row);
+    const web = await request(app)
+      .post("/api/users/login")
+      .set("X-Fixer-Client", "web")
+      .send({ email: "ada@example.com", password: "password123" });
+    expect(web.body.token).toBeUndefined();
+
+    db.query.mockResolvedValueOnce(row);
+    const android = await request(app)
+      .post("/api/users/login")
+      .set("Origin", "https://localhost")
+      .set("X-Fixer-Client", "android")
+      .send({ email: "ada@example.com", password: "password123" });
+    expect(android.status).toBe(200);
+    expect(typeof android.body.token).toBe("string");
+
+    // …and that token works as a Bearer token from the app's origin.
+    db.query.mockResolvedValueOnce([[{ id: 1, first_name: "Ada" }]]);
+    const me = await request(app)
+      .get("/api/users/me")
+      .set("Origin", "https://localhost")
+      .set("Authorization", `Bearer ${android.body.token}`);
+    expect(me.status).toBe(200);
+  });
+
+  it("the CSRF guard accepts the Android client header but nothing else", async () => {
+    const blocked = await request(app)
+      .post("/api/users/login")
+      .set("Origin", "https://localhost")
+      .set("X-Fixer-Client", "something")
+      .send({});
+    expect(blocked.status).toBe(403);
+  });
+});
+
+describe("Android app sessions", () => {
+  const jwt = require("jsonwebtoken");
+
+  async function loginAs(client) {
+    const hashed = await bcrypt.hash("correct-password", 4);
+    db.query.mockResolvedValueOnce([[{ id: 3, email: "ada@example.com", password: hashed, role: "user", token_version: 2 }]]);
+    const req = request(app).post("/api/users/login").send({ email: "ada@example.com", password: "correct-password" });
+    if (client) req.set("X-Fixer-Client", client);
+    return req;
+  }
+
+  it("gives the app its token in the body (it can't rely on a cross-site cookie)", async () => {
+    const res = await loginAs("android");
+    expect(res.status).toBe(200);
+    expect(jwt.verify(res.body.token, process.env.JWT_SECRET)).toMatchObject({ id: 3, role: "user", tv: 2 });
+  });
+
+  it("never puts the token in the body for browsers", async () => {
+    expect((await loginAs("web")).body.token).toBeUndefined();
+    expect((await loginAs()).body.token).toBeUndefined();
+  });
+
+  it("the app's Bearer token works and a password change hands it a fresh one", async () => {
+    const res = await loginAs("android");
+    db.query
+      .mockResolvedValueOnce([[{ id: 3, first_name: "Ada", email: "ada@example.com", role: "user", token_version: 2, password: await bcrypt.hash("correct-password", 4) }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+    const change = await request(app)
+      .patch("/api/users/me/password")
+      .set("Authorization", `Bearer ${res.body.token}`)
+      .set("X-Fixer-Client", "android")
+      .set("Origin", "https://localhost")
+      .send({ current_password: "correct-password", new_password: "brand-new-pass" });
+    expect(change.status).toBe(200);
+    expect(jwt.decode(change.body.token).tv).toBe(3);
+  });
+
+  it("the app passes the CSRF guard from its WebView origin", async () => {
+    const res = await request(app)
+      .post("/api/users/login")
+      .set("Origin", "https://localhost")
+      .set("X-Fixer-Client", "android")
+      .send({ email: "a@b.co", password: "x" });
+    expect(res.status).not.toBe(403);
+  });
+
+  it("other client values are still blocked", async () => {
+    const res = await request(app)
+      .post("/api/users/login")
+      .set("Origin", "https://localhost")
+      .set("X-Fixer-Client", "evil")
+      .send({ email: "a@b.co", password: "x" });
+    expect(res.status).toBe(403);
+  });
+});

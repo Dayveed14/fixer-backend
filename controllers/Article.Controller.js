@@ -21,7 +21,8 @@ exports.createArticle = async (req, res) => {
       return res.status(400).json({ message: problem });
     }
 
-    const { title, slug, excerpt, content, category, tags, featured, status, image_alt } = values;
+    const { title, slug, excerpt, content, category, tags, status, image_alt } = values;
+    const featured = values.featured ?? 0;
     const author_id = req.user.id;
 
     const hero_image = req.file ? req.file.cloudinaryUrl : null;
@@ -208,7 +209,7 @@ exports.updateArticle = async (req, res) => {
         content = ?,
         category = ?,
         tags = ?,
-        featured = ?,
+        featured = COALESCE(?, featured),
         status = ?,
         image_alt = ?
     `;
@@ -219,7 +220,7 @@ exports.updateArticle = async (req, res) => {
       content,
       category,
       tags,
-      featured,
+      featured ?? null,
       status,
       image_alt,
     ];

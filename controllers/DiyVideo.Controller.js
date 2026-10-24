@@ -19,7 +19,8 @@ exports.createVideo = async (req, res) => {
       return res.status(400).json({ message: problem });
     }
 
-    const { title, slug, excerpt, content, category, tags, featured, status } = values;
+    const { title, slug, excerpt, content, category, tags, status } = values;
+    const featured = values.featured ?? 0;
     const author_id = req.user.id;
 
     const video_url = req.file ? req.file.cloudinaryUrl : null;
@@ -145,7 +146,19 @@ exports.updateVideo = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { problem, values: clean } = publishable(req.body);
+    // The edit form doesn't send the slug: keep the current one (it's the
+    // public URL) unless a new slug is given explicitly.
+    let currentSlug = null;
+    if (!req.body?.slug) {
+      const [rows] = await db.query("SELECT slug FROM diy_videos WHERE id = ?", [id]);
+      if (!rows[0]) {
+        await discardUpload(req);
+        return res.status(404).json({ message: "Video not found." });
+      }
+      currentSlug = rows[0].slug;
+    }
+
+    const { problem, values: clean } = publishable({ ...req.body, slug: req.body?.slug || currentSlug });
     if (problem) {
       await discardUpload(req);
       return res.status(400).json({ message: problem });
@@ -162,7 +175,7 @@ excerpt=?,
 content=?,
 category=?,
 tags=?,
-featured=?,
+featured=COALESCE(?, featured),
 status=?
 `;
 
@@ -173,7 +186,7 @@ status=?
       content,
       category,
       tags,
-      featured,
+      featured ?? null,
       status,
     ];
 

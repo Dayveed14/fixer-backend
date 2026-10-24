@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit & route tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test -- --ci
+
+  integration:
+    name: Integration tests (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        db: ["mysql:8.0", "mariadb:10.11"]
+    services:
+      mysql:
+        image: ${{ matrix.db }}
+        env:
+          MYSQL_ROOT_PASSWORD: fixer
+          MARIADB_ROOT_PASSWORD: fixer
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pfixer || mariadb-admin ping -h 127.0.0.1 -pfixer"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: fixer
+      DB_NAME: fixer_integration
+      DB_SSL: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Payments, concurrency, sessions, migrations + rollbacks
+        run: npm run test:integration -- --ci
+      - name: Backup → restore → verify (row counts + checksums)
+        run: |
+          node scripts/db-setup.js
+          DB_NAME=fixer_integration bash scripts/verify-restore.sh
+
+  start:
+    name: Production start-up
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev
+      - name: Refuses to start without required configuration
+        run: |
+          if NODE_ENV=production node app.js; then
+            echo "Started without configuration — it should refuse"; exit 1
+          fi
+      - name: Starts with plain node and answers the health check
+        env:
+          NODE_ENV: production
+          PORT: 4123
+          JWT_SECRET: ci-secret-that-is-at-least-thirty-two-chars
+          DB_HOST: 127.0.0.1
+          DB_USER: x
+          DB_PASSWORD: x
+          DB_NAME: x
+          PAYSTACK_SECRET_KEY: sk_test_ci
+          RESEND_API_KEY: re_ci
+        run: |
+          node app.js > server.log 2>&1 &
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:4123/api/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:4123/api/health | grep -q '"status":"ok"'
+          kill -TERM %1
+          wait %1 || true
+          grep -q "SIGTERM received" server.log

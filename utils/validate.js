@@ -99,7 +99,14 @@ function publishable(body = {}, { slugFallbackToTitle = true } = {}) {
   const slug = toSlug(body.slug || (slugFallbackToTitle ? body.title : ""));
   if (!slug) return { problem: "A valid slug is required (letters, numbers and dashes)." };
 
-  const featured = [true, 1, "1", "true", "on"].includes(body.featured) ? 1 : 0;
+  // Left undefined when the form doesn't send it, so edits keep the
+  // current setting (creates default to "not featured").
+  const featured =
+    body.featured === undefined || body.featured === ""
+      ? undefined
+      : [true, 1, "1", "true", "on"].includes(body.featured)
+        ? 1
+        : 0;
 
   return {
     values: {
